@@ -1,0 +1,312 @@
+use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Vec2<T> {
+    pub x: T,
+    pub y: T,
+}
+
+impl<T> Vec2<T> {
+    pub const fn new(x: T, y: T) -> Self {
+        Self { x, y }
+    }
+}
+
+impl<T> Add for Vec2<T>
+where
+    T: Add<Output = T>,
+{
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+impl<T> AddAssign for Vec2<T>
+where
+    T: AddAssign,
+{
+    fn add_assign(&mut self, rhs: Self) {
+        self.x += rhs.x;
+        self.y += rhs.y;
+    }
+}
+
+impl<T> Sub for Vec2<T>
+where
+    T: Sub<Output = T>,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl<T> SubAssign for Vec2<T>
+where
+    T: SubAssign,
+{
+    fn sub_assign(&mut self, rhs: Self) {
+        self.x -= rhs.x;
+        self.y -= rhs.y;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Vec3<T> {
+    pub x: T,
+    pub y: T,
+    pub z: T,
+}
+
+impl<T> Vec3<T> {
+    pub const fn new(x: T, y: T, z: T) -> Self {
+        Self { x, y, z }
+    }
+}
+
+impl<T> Add for Vec3<T>
+where
+    T: Add<Output = T>,
+{
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
+    }
+}
+
+impl<T> Sub for Vec3<T>
+where
+    T: Sub<Output = T>,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Aabb2<T> {
+    pub min: Vec2<T>,
+    pub max: Vec2<T>,
+}
+
+impl<T> Aabb2<T>
+where
+    T: Copy + Ord,
+{
+    pub const fn new(min: Vec2<T>, max: Vec2<T>) -> Self {
+        Self { min, max }
+    }
+
+    pub fn contains(&self, point: Vec2<T>) -> bool {
+        point.x >= self.min.x
+            && point.x <= self.max.x
+            && point.y >= self.min.y
+            && point.y <= self.max.y
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct Aabb3<T> {
+    pub min: Vec3<T>,
+    pub max: Vec3<T>,
+}
+
+impl<T> Aabb3<T>
+where
+    T: Copy + Ord,
+{
+    pub const fn new(min: Vec3<T>, max: Vec3<T>) -> Self {
+        Self { min, max }
+    }
+
+    pub fn contains(&self, point: Vec3<T>) -> bool {
+        point.x >= self.min.x
+            && point.x <= self.max.x
+            && point.y >= self.min.y
+            && point.y <= self.max.y
+            && point.z >= self.min.z
+            && point.z <= self.max.z
+    }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        self.min.x <= other.max.x
+            && self.max.x >= other.min.x
+            && self.min.y <= other.max.y
+            && self.max.y >= other.min.y
+            && self.min.z <= other.max.z
+            && self.max.z >= other.min.z
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Fixed<const FRACTION_BITS: u32> {
+    raw: i64,
+}
+
+impl<const FRACTION_BITS: u32> Fixed<FRACTION_BITS> {
+    pub const fn from_raw(raw: i64) -> Self {
+        Self { raw }
+    }
+
+    pub const fn from_int(value: i64) -> Self {
+        Self {
+            raw: value << FRACTION_BITS,
+        }
+    }
+
+    pub const fn raw(self) -> i64 {
+        self.raw
+    }
+
+    pub const fn floor_to_int(self) -> i64 {
+        self.raw >> FRACTION_BITS
+    }
+
+    pub fn to_f64(self) -> f64 {
+        self.raw as f64 / ((1u64 << FRACTION_BITS) as f64)
+    }
+}
+
+impl<const FRACTION_BITS: u32> Add for Fixed<FRACTION_BITS> {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::from_raw(self.raw + rhs.raw)
+    }
+}
+
+impl<const FRACTION_BITS: u32> Sub for Fixed<FRACTION_BITS> {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::from_raw(self.raw - rhs.raw)
+    }
+}
+
+impl<const FRACTION_BITS: u32> Mul for Fixed<FRACTION_BITS> {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        let value = ((self.raw as i128) * (rhs.raw as i128)) >> FRACTION_BITS;
+        Self::from_raw(value as i64)
+    }
+}
+
+impl<const FRACTION_BITS: u32> Div for Fixed<FRACTION_BITS> {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        let value = ((self.raw as i128) << FRACTION_BITS) / (rhs.raw as i128);
+        Self::from_raw(value as i64)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct StrictF32 {
+    bits: u32,
+}
+
+impl StrictF32 {
+    pub const fn from_bits(bits: u32) -> Self {
+        Self { bits }
+    }
+
+    pub fn new(value: f32) -> Self {
+        Self {
+            bits: value.to_bits(),
+        }
+    }
+
+    pub const fn to_bits(self) -> u32 {
+        self.bits
+    }
+
+    pub fn to_f32(self) -> f32 {
+        f32::from_bits(self.bits)
+    }
+
+    pub fn add(self, rhs: Self) -> Self {
+        Self::new(self.to_f32() + rhs.to_f32())
+    }
+
+    pub fn sub(self, rhs: Self) -> Self {
+        Self::new(self.to_f32() - rhs.to_f32())
+    }
+
+    pub fn mul(self, rhs: Self) -> Self {
+        Self::new(self.to_f32() * rhs.to_f32())
+    }
+
+    pub fn div(self, rhs: Self) -> Self {
+        Self::new(self.to_f32() / rhs.to_f32())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct StrictF64 {
+    bits: u64,
+}
+
+impl StrictF64 {
+    pub const fn from_bits(bits: u64) -> Self {
+        Self { bits }
+    }
+
+    pub fn new(value: f64) -> Self {
+        Self {
+            bits: value.to_bits(),
+        }
+    }
+
+    pub const fn to_bits(self) -> u64 {
+        self.bits
+    }
+
+    pub fn to_f64(self) -> f64 {
+        f64::from_bits(self.bits)
+    }
+
+    pub fn add(self, rhs: Self) -> Self {
+        Self::new(self.to_f64() + rhs.to_f64())
+    }
+
+    pub fn sub(self, rhs: Self) -> Self {
+        Self::new(self.to_f64() - rhs.to_f64())
+    }
+
+    pub fn mul(self, rhs: Self) -> Self {
+        Self::new(self.to_f64() * rhs.to_f64())
+    }
+
+    pub fn div(self, rhs: Self) -> Self {
+        Self::new(self.to_f64() / rhs.to_f64())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_math_is_exact_for_small_values() {
+        type F = Fixed<8>;
+        let a = F::from_int(3);
+        let b = F::from_int(2);
+        assert_eq!((a + b).floor_to_int(), 5);
+        assert_eq!((a - b).floor_to_int(), 1);
+        assert_eq!((a * b).floor_to_int(), 6);
+    }
+}
