@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -237,25 +238,9 @@ impl StrictF32 {
     pub fn to_f32(self) -> f32 {
         f32::from_bits(self.bits)
     }
-
-    pub fn add(self, rhs: Self) -> Self {
-        Self::new(self.to_f32() + rhs.to_f32())
-    }
-
-    pub fn sub(self, rhs: Self) -> Self {
-        Self::new(self.to_f32() - rhs.to_f32())
-    }
-
-    pub fn mul(self, rhs: Self) -> Self {
-        Self::new(self.to_f32() * rhs.to_f32())
-    }
-
-    pub fn div(self, rhs: Self) -> Self {
-        Self::new(self.to_f32() / rhs.to_f32())
-    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct StrictF64 {
     bits: u64,
 }
@@ -279,19 +264,100 @@ impl StrictF64 {
         f64::from_bits(self.bits)
     }
 
-    pub fn add(self, rhs: Self) -> Self {
+    pub fn is_finite(self) -> bool {
+        self.to_f64().is_finite()
+    }
+
+    pub fn clamp(self, min: Self, max: Self) -> Self {
+        let value = self.to_f64().clamp(min.to_f64(), max.to_f64());
+        Self::new(value)
+    }
+}
+
+impl Add for StrictF32 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.to_f32() + rhs.to_f32())
+    }
+}
+
+impl Sub for StrictF32 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.to_f32() - rhs.to_f32())
+    }
+}
+
+impl Mul for StrictF32 {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        Self::new(self.to_f32() * rhs.to_f32())
+    }
+}
+
+impl Div for StrictF32 {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        Self::new(self.to_f32() / rhs.to_f32())
+    }
+}
+
+impl PartialOrd for StrictF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StrictF64 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.to_f64().total_cmp(&other.to_f64())
+    }
+}
+
+impl Add for StrictF64 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
         Self::new(self.to_f64() + rhs.to_f64())
     }
+}
 
-    pub fn sub(self, rhs: Self) -> Self {
+impl AddAssign for StrictF64 {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub for StrictF64 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
         Self::new(self.to_f64() - rhs.to_f64())
     }
+}
 
-    pub fn mul(self, rhs: Self) -> Self {
+impl SubAssign for StrictF64 {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = *self - rhs;
+    }
+}
+
+impl Mul for StrictF64 {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
         Self::new(self.to_f64() * rhs.to_f64())
     }
+}
 
-    pub fn div(self, rhs: Self) -> Self {
+impl Div for StrictF64 {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
         Self::new(self.to_f64() / rhs.to_f64())
     }
 }

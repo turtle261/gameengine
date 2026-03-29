@@ -31,7 +31,7 @@ impl<G: Game> Policy<G> for FirstLegalPolicy {
     ) -> G::Action {
         legal_actions
             .first()
-            .cloned()
+            .copied()
             .expect("policy requires at least one legal action")
     }
 }
@@ -50,7 +50,7 @@ impl<G: Game> Policy<G> for RandomPolicy {
         rng: &mut DeterministicRng,
     ) -> G::Action {
         let index = rng.gen_range(legal_actions.len());
-        legal_actions[index].clone()
+        legal_actions[index]
     }
 }
 
@@ -85,12 +85,12 @@ where
         if let Some(action) = self.script.get(self.position) {
             self.position += 1;
             if legal_actions.contains(action) {
-                return action.clone();
+                return *action;
             }
         }
         legal_actions
             .first()
-            .cloned()
+            .copied()
             .expect("policy requires at least one legal action")
     }
 }

@@ -1,12 +1,12 @@
 use std::env;
 use std::io::{self, Write};
 
-use gameengine::games::{
-    Blackjack, BlackjackAction, Platformer, PlatformerAction, TicTacToe, TicTacToeAction,
-};
+use gameengine::buffer::Buffer;
+use gameengine::games::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
+#[cfg(feature = "physics")]
+use gameengine::games::{Platformer, PlatformerAction};
 use gameengine::policy::{FirstLegalPolicy, Policy, RandomPolicy, ScriptedPolicy};
-use gameengine::rng::DeterministicRng;
-use gameengine::{CompactGame, Session, stable_hash};
+use gameengine::{CompactGame, Game, Session, stable_hash};
 
 fn main() {
     if let Err(error) = run() {
@@ -26,6 +26,7 @@ fn run() -> Result<(), String> {
         "list" => {
             println!("tictactoe");
             println!("blackjack");
+            #[cfg(feature = "physics")]
             println!("platformer");
             Ok(())
         }
@@ -37,6 +38,7 @@ fn run() -> Result<(), String> {
             match game.as_str() {
                 "tictactoe" => run_tictactoe(config),
                 "blackjack" => run_blackjack(config),
+                #[cfg(feature = "physics")]
                 "platformer" => run_platformer(config),
                 _ => Err(format!("unknown game: {game}")),
             }
@@ -136,8 +138,9 @@ fn run_blackjack(config: CliConfig) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "physics")]
 fn run_platformer(config: CliConfig) -> Result<(), String> {
-    let game = Platformer;
+    let game = Platformer::default();
     let mut session = Session::new(game, config.seed);
     let mut human = HumanPlatformer;
     let mut random = RandomPolicy;
@@ -158,28 +161,23 @@ fn run_platformer(config: CliConfig) -> Result<(), String> {
 
 fn run_with_policy<G, P>(session: &mut Session<G>, max_steps: usize, policy: &mut P) -> u64
 where
-    G: gameengine::Game + CompactGame,
+    G: Game + CompactGame + Copy,
     P: Policy<G>,
 {
     let mut policies: Vec<&mut dyn Policy<G>> = vec![policy];
     while !session.is_terminal() && (session.current_tick() as usize) < max_steps {
-        let _ = session.step_with_policies(&mut policies);
+        let outcome = session.step_with_policies(&mut policies).clone();
         let spectator = session.spectator_observation();
-        let mut compact = Vec::new();
+        let mut compact = G::WordBuf::default();
         session
             .game()
             .encode_spectator_observation(&spectator, &mut compact);
         println!(
             "tick={} reward={} terminal={} compact={:?}",
             session.current_tick(),
-            session
-                .trace()
-                .steps
-                .last()
-                .map(|step| step.rewards[0].reward)
-                .unwrap_or(0),
+            outcome.reward_for(0),
             session.is_terminal(),
-            compact,
+            compact.as_slice(),
         );
         println!("{spectator:#?}");
     }
@@ -201,8 +199,9 @@ fn run_validation_smoke() -> Result<(), String> {
         let mut scripted = ScriptedPolicy::new(vec![BlackjackAction::Hit, BlackjackAction::Stand]);
         run_with_policy(&mut session, 8, &mut scripted)
     };
+    #[cfg(feature = "physics")]
     let platformer_hash = {
-        let mut session = Session::new(Platformer, 3);
+        let mut session = Session::new(Platformer::default(), 3);
         let mut scripted = ScriptedPolicy::new(vec![
             PlatformerAction::Right,
             PlatformerAction::Jump,
@@ -212,6 +211,7 @@ fn run_validation_smoke() -> Result<(), String> {
     };
     println!("tictactoe trace hash: {ttt_hash:016x}");
     println!("blackjack trace hash: {blackjack_hash:016x}");
+    #[cfg(feature = "physics")]
     println!("platformer trace hash: {platformer_hash:016x}");
     Ok(())
 }
@@ -246,6 +246,7 @@ fn parse_blackjack_script(spec: &str) -> Vec<BlackjackAction> {
     })
 }
 
+#[cfg(feature = "physics")]
 fn parse_platformer_script(spec: &str) -> Vec<PlatformerAction> {
     parse_script(spec, |token| match token.to_ascii_lowercase().as_str() {
         "stay" | "s" => Some(PlatformerAction::Stay),
@@ -260,58 +261,13 @@ fn parse_script<A, F>(spec: &str, parser: F) -> Vec<A>
 where
     F: Fn(&str) -> Option<A>,
 {
-    if let Some(rest) = spec.strip_prefix("script:") {
-        rest.split(',')
-            .filter_map(|token| parser(token.trim()))
-            .collect()
-    } else {
-        Vec::new()
-    }
-}
-
-fn print_tictactoe(observation: &gameengine::games::TicTacToeObservation) {
-    for row in 0..3 {
-        let mut line = String::new();
-        for col in 0..3 {
-            let cell = match observation.board[row * 3 + col] {
-                gameengine::games::tictactoe::TicTacToeCell::Empty => '.',
-                gameengine::games::tictactoe::TicTacToeCell::Player => 'X',
-                gameengine::games::tictactoe::TicTacToeCell::Opponent => 'O',
-            };
-            line.push(cell);
-            if col < 2 {
-                line.push(' ');
-            }
-        }
-        println!("{line}");
-    }
-}
-
-fn print_blackjack(observation: &gameengine::games::BlackjackObservation) {
-    println!(
-        "player total={} soft={} cards={:?}",
-        observation.player_value.total,
-        observation.player_value.soft,
-        &observation.player_cards[..observation.player_len as usize]
-    );
-    println!(
-        "opponent visible cards={:?} hidden_count={}",
-        &observation.opponent_cards[..observation.opponent_visible_len as usize],
-        observation
-            .opponent_card_count
-            .saturating_sub(observation.opponent_visible_len)
-    );
-}
-
-fn print_platformer(observation: &gameengine::games::PlatformerObservation) {
-    let mut lane = ['.'; 12];
-    for (index, slot) in lane.iter_mut().enumerate() {
-        if observation.remaining_berries & (1u8 << (index / 2)) != 0 && index % 2 == 1 {
-            *slot = '*';
-        }
-    }
-    lane[observation.x as usize] = if observation.y == 1 { 'A' } else { '@' };
-    println!("{}", lane.iter().collect::<String>());
+    let Some(script) = spec.strip_prefix("script:") else {
+        return Vec::new();
+    };
+    script
+        .split(',')
+        .filter_map(|token| parser(token.trim()))
+        .collect()
 }
 
 struct HumanTicTacToe;
@@ -320,23 +276,21 @@ impl Policy<TicTacToe> for HumanTicTacToe {
     fn choose_action(
         &mut self,
         _game: &TicTacToe,
-        _state: &gameengine::games::tictactoe::TicTacToeState,
+        _state: &<TicTacToe as Game>::State,
         _player: usize,
-        observation: &gameengine::games::TicTacToeObservation,
-        legal_actions: &[TicTacToeAction],
-        _rng: &mut DeterministicRng,
-    ) -> TicTacToeAction {
+        _observation: &<TicTacToe as Game>::PlayerObservation,
+        legal_actions: &[<TicTacToe as Game>::Action],
+        _rng: &mut gameengine::DeterministicRng,
+    ) -> <TicTacToe as Game>::Action {
         loop {
-            print_tictactoe(observation);
-            println!("legal actions: {:?}", legal_actions);
-            let input = prompt("choose square [0-8]: ").expect("stdin prompt failed");
+            let input = prompt("choose move [0-8]: ").expect("stdin prompt failed");
             if let Ok(index) = input.trim().parse::<u8>() {
-                let action = TicTacToeAction(index);
-                if legal_actions.contains(&action) {
-                    return action;
+                let candidate = TicTacToeAction(index);
+                if legal_actions.contains(&candidate) {
+                    return candidate;
                 }
             }
-            println!("invalid action");
+            println!("legal moves: {:?}", legal_actions);
         }
     }
 }
@@ -347,61 +301,61 @@ impl Policy<Blackjack> for HumanBlackjack {
     fn choose_action(
         &mut self,
         _game: &Blackjack,
-        _state: &gameengine::games::blackjack::BlackjackState,
+        _state: &<Blackjack as Game>::State,
         _player: usize,
-        observation: &gameengine::games::BlackjackObservation,
-        legal_actions: &[BlackjackAction],
-        _rng: &mut DeterministicRng,
-    ) -> BlackjackAction {
+        _observation: &<Blackjack as Game>::PlayerObservation,
+        legal_actions: &[<Blackjack as Game>::Action],
+        _rng: &mut gameengine::DeterministicRng,
+    ) -> <Blackjack as Game>::Action {
         loop {
-            print_blackjack(observation);
-            println!("legal actions: {:?}", legal_actions);
-            let input = prompt("choose action [hit|stand]: ").expect("stdin prompt failed");
-            let action = match input.trim().to_ascii_lowercase().as_str() {
-                "h" | "hit" => Some(BlackjackAction::Hit),
-                "s" | "stand" => Some(BlackjackAction::Stand),
-                _ => None,
-            };
-            if let Some(action) = action {
-                if legal_actions.contains(&action) {
-                    return action;
+            let input = prompt("choose action [hit/stand]: ").expect("stdin prompt failed");
+            let candidate = match input.trim().to_ascii_lowercase().as_str() {
+                "hit" | "h" => BlackjackAction::Hit,
+                "stand" | "s" => BlackjackAction::Stand,
+                _ => {
+                    println!("legal actions: {:?}", legal_actions);
+                    continue;
                 }
+            };
+            if legal_actions.contains(&candidate) {
+                return candidate;
             }
-            println!("invalid action");
+            println!("legal actions: {:?}", legal_actions);
         }
     }
 }
 
+#[cfg(feature = "physics")]
 struct HumanPlatformer;
 
+#[cfg(feature = "physics")]
 impl Policy<Platformer> for HumanPlatformer {
     fn choose_action(
         &mut self,
         _game: &Platformer,
-        _state: &gameengine::games::platformer::PlatformerState,
+        _state: &<Platformer as Game>::State,
         _player: usize,
-        observation: &gameengine::games::PlatformerObservation,
-        legal_actions: &[PlatformerAction],
-        _rng: &mut DeterministicRng,
-    ) -> PlatformerAction {
+        _observation: &<Platformer as Game>::PlayerObservation,
+        legal_actions: &[<Platformer as Game>::Action],
+        _rng: &mut gameengine::DeterministicRng,
+    ) -> <Platformer as Game>::Action {
         loop {
-            print_platformer(observation);
-            println!("legal actions: {:?}", legal_actions);
             let input =
-                prompt("choose action [stay|left|right|jump]: ").expect("stdin prompt failed");
-            let action = match input.trim().to_ascii_lowercase().as_str() {
-                "stay" | "s" => Some(PlatformerAction::Stay),
-                "left" | "l" => Some(PlatformerAction::Left),
-                "right" | "r" => Some(PlatformerAction::Right),
-                "jump" | "j" => Some(PlatformerAction::Jump),
-                _ => None,
-            };
-            if let Some(action) = action {
-                if legal_actions.contains(&action) {
-                    return action;
+                prompt("choose action [stay/left/right/jump]: ").expect("stdin prompt failed");
+            let candidate = match input.trim().to_ascii_lowercase().as_str() {
+                "stay" | "s" => PlatformerAction::Stay,
+                "left" | "l" => PlatformerAction::Left,
+                "right" | "r" => PlatformerAction::Right,
+                "jump" | "j" => PlatformerAction::Jump,
+                _ => {
+                    println!("legal actions: {:?}", legal_actions);
+                    continue;
                 }
+            };
+            if legal_actions.contains(&candidate) {
+                return candidate;
             }
-            println!("invalid action");
+            println!("legal actions: {:?}", legal_actions);
         }
     }
 }

@@ -3,12 +3,18 @@ name = "gameengine"
 version = "0.1.0"
 edition = "2024"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [features]
 default = []
+physics = []
 parallel = ["dep:rayon"]
+experimental-rapier = ["physics", "dep:rapier2d-f64"]
 
 [dependencies]
 rayon = { version = "1.11.0", optional = true }
+rapier2d-f64 = { version = "0.32.0", optional = true, default-features = false, features = ["dim2", "f64", "enhanced-determinism", "serde-serialize"] }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", default-features = false, features = ["cargo_bench_support"] }

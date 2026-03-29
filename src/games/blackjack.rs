@@ -1,44 +1,61 @@
+use crate::buffer::FixedVec;
 use crate::compact::{CompactGame, CompactSpec};
 use crate::game::Game;
 use crate::rng::DeterministicRng;
 use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
-
 const MAX_HAND_CARDS: usize = 12;
 const DECK_SIZE: usize = 52;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum BlackjackAction {
+    #[default]
     Hit,
     Stand,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum BlackjackPhase {
+    #[default]
     PlayerTurn,
     OpponentTurn,
     Terminal,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct HandValue {
     pub total: u8,
     pub soft: bool,
     pub busted: bool,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BlackjackState {
-    deck: [u8; DECK_SIZE],
-    next_card: u8,
-    player_cards: [u8; MAX_HAND_CARDS],
-    player_len: u8,
-    opponent_cards: [u8; MAX_HAND_CARDS],
-    opponent_len: u8,
-    phase: BlackjackPhase,
-    winner: Option<PlayerId>,
+    pub deck: [u8; DECK_SIZE],
+    pub next_card: u8,
+    pub player_cards: [u8; MAX_HAND_CARDS],
+    pub player_len: u8,
+    pub opponent_cards: [u8; MAX_HAND_CARDS],
+    pub opponent_len: u8,
+    pub phase: BlackjackPhase,
+    pub winner: Option<PlayerId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl Default for BlackjackState {
+    fn default() -> Self {
+        Self {
+            deck: [0; DECK_SIZE],
+            next_card: 0,
+            player_cards: [0; MAX_HAND_CARDS],
+            player_len: 0,
+            opponent_cards: [0; MAX_HAND_CARDS],
+            opponent_len: 0,
+            phase: BlackjackPhase::PlayerTurn,
+            winner: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct BlackjackObservation {
     pub phase: BlackjackPhase,
     pub terminal: bool,
@@ -51,7 +68,7 @@ pub struct BlackjackObservation {
     pub opponent_card_count: u8,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct BlackjackSpectatorObservation {
     pub phase: BlackjackPhase,
     pub terminal: bool,
@@ -64,6 +81,8 @@ pub struct BlackjackSpectatorObservation {
     pub opponent_value: HandValue,
 }
 
+pub type BlackjackWorldView = BlackjackSpectatorObservation;
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Blackjack;
 
@@ -71,7 +90,14 @@ impl Blackjack {
     fn evaluate_hand(cards: &[u8], len: u8) -> HandValue {
         let mut total = 0u8;
         let mut aces = 0u8;
-        for &card in cards.iter().take(len as usize) {
+        let limit = len as usize;
+        let mut index = 0usize;
+        let max_len = MAX_HAND_CARDS.min(cards.len());
+        while index < max_len {
+            if index >= limit {
+                break;
+            }
+            let card = cards[index];
             match card {
                 1 => {
                     total = total.saturating_add(11);
@@ -80,8 +106,12 @@ impl Blackjack {
                 11..=13 => total = total.saturating_add(10),
                 value => total = total.saturating_add(value),
             }
+            index += 1;
         }
-        while total > 21 && aces > 0 {
+        for _ in 0..MAX_HAND_CARDS {
+            if total <= 21 || aces == 0 {
+                break;
+            }
             total -= 10;
             aces -= 1;
         }
@@ -154,6 +184,9 @@ impl Blackjack {
             if !hit {
                 break;
             }
+            if state.next_card as usize >= DECK_SIZE {
+                break;
+            }
             let card = Self::draw_card(state);
             Self::push_opponent_card(state, card);
         }
@@ -162,8 +195,14 @@ impl Blackjack {
 
     fn pack_cards(cards: &[u8; MAX_HAND_CARDS], len: u8) -> u64 {
         let mut packed = 0u64;
-        for (index, &card) in cards.iter().take(len as usize).enumerate() {
-            packed |= u64::from(card) << (index * 4);
+        let limit = len as usize;
+        let mut index = 0usize;
+        while index < MAX_HAND_CARDS {
+            if index >= limit {
+                break;
+            }
+            packed |= u64::from(cards[index]) << (index * 4);
+            index += 1;
         }
         packed
     }
@@ -174,6 +213,12 @@ impl Game for Blackjack {
     type Action = BlackjackAction;
     type PlayerObservation = BlackjackObservation;
     type SpectatorObservation = BlackjackSpectatorObservation;
+    type WorldView = BlackjackWorldView;
+    type PlayerBuf = FixedVec<PlayerId, 1>;
+    type ActionBuf = FixedVec<BlackjackAction, 2>;
+    type JointActionBuf = FixedVec<PlayerAction<BlackjackAction>, 1>;
+    type RewardBuf = FixedVec<PlayerReward, 1>;
+    type WordBuf = FixedVec<u64, 4>;
 
     fn name(&self) -> &'static str {
         "blackjack"
@@ -215,24 +260,24 @@ impl Game for Blackjack {
         matches!(state.phase, BlackjackPhase::Terminal)
     }
 
-    fn players_to_act(&self, state: &Self::State, out: &mut Vec<PlayerId>) {
+    fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
         out.clear();
         if !self.is_terminal(state) {
-            out.push(0);
+            out.push(0).unwrap();
         }
     }
 
-    fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Vec<Self::Action>) {
+    fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Self::ActionBuf) {
         out.clear();
         if player != 0 || self.is_terminal(state) {
             return;
         }
         let value = Self::player_value(state);
         if value.total >= 21 {
-            out.push(BlackjackAction::Stand);
+            out.push(BlackjackAction::Stand).unwrap();
         } else {
-            out.push(BlackjackAction::Hit);
-            out.push(BlackjackAction::Stand);
+            out.push(BlackjackAction::Hit).unwrap();
+            out.push(BlackjackAction::Stand).unwrap();
         }
     }
 
@@ -270,17 +315,28 @@ impl Game for Blackjack {
         }
     }
 
+    fn world_view(&self, state: &Self::State) -> Self::WorldView {
+        self.observe_spectator(state)
+    }
+
     fn step_in_place(
         &self,
         state: &mut Self::State,
-        joint_actions: &[PlayerAction<Self::Action>],
+        joint_actions: &Self::JointActionBuf,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome,
+        out: &mut StepOutcome<Self::RewardBuf>,
     ) {
-        let action = joint_actions
-            .iter()
-            .find(|candidate| candidate.player == 0)
-            .map(|candidate| candidate.action);
+        let actions = joint_actions.as_slice();
+        let mut action = None;
+        let mut index = 0usize;
+        while index < actions.len() {
+            let candidate = &actions[index];
+            if candidate.player == 0 {
+                action = Some(candidate.action);
+                break;
+            }
+            index += 1;
+        }
 
         let reward = if self.is_terminal(state) {
             out.termination = Termination::Terminal {
@@ -336,10 +392,78 @@ impl Game for Blackjack {
             -1
         };
 
-        out.rewards.push(PlayerReward { player: 0, reward });
+        out.rewards
+            .push(PlayerReward { player: 0, reward })
+            .unwrap();
         if !self.is_terminal(state) {
             out.termination = Termination::Ongoing;
         }
+    }
+
+    fn state_invariant(&self, state: &Self::State) -> bool {
+        if state.player_len < 2
+            || state.opponent_len < 2
+            || usize::from(state.player_len) > MAX_HAND_CARDS
+            || usize::from(state.opponent_len) > MAX_HAND_CARDS
+            || usize::from(state.next_card) > DECK_SIZE
+        {
+            return false;
+        }
+        let mut counts = [0u8; 14];
+        for index in 0..DECK_SIZE {
+            let card = state.deck[index];
+            if !(1..=13).contains(&card) {
+                return false;
+            }
+            counts[card as usize] += 1;
+        }
+        let mut rank = 1usize;
+        while rank <= 13 {
+            if counts[rank] != 4 {
+                return false;
+            }
+            rank += 1;
+        }
+        if self.is_terminal(state) {
+            let mut resolved = *state;
+            Self::resolve_terminal(&mut resolved);
+            resolved.winner == state.winner
+        } else {
+            true
+        }
+    }
+
+    fn player_observation_invariant(
+        &self,
+        state: &Self::State,
+        _player: PlayerId,
+        observation: &Self::PlayerObservation,
+    ) -> bool {
+        if self.is_terminal(state) {
+            observation.opponent_visible_len == state.opponent_len
+                && observation.opponent_cards == state.opponent_cards
+        } else {
+            if observation.opponent_visible_len != 0 {
+                return false;
+            }
+            for index in 0..MAX_HAND_CARDS {
+                if observation.opponent_cards[index] != 0 {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
+    fn transition_postcondition(
+        &self,
+        _pre: &Self::State,
+        _actions: &Self::JointActionBuf,
+        post: &Self::State,
+        outcome: &StepOutcome<Self::RewardBuf>,
+    ) -> bool {
+        matches!(outcome.reward_for(0), -1..=1)
+            && (post.phase == BlackjackPhase::Terminal) == outcome.is_terminal()
     }
 }
 
@@ -371,7 +495,11 @@ impl CompactGame for Blackjack {
         }
     }
 
-    fn encode_player_observation(&self, observation: &Self::PlayerObservation, out: &mut Vec<u64>) {
+    fn encode_player_observation(
+        &self,
+        observation: &Self::PlayerObservation,
+        out: &mut Self::WordBuf,
+    ) {
         out.clear();
         let winner_code = match observation.winner {
             None => 0,
@@ -391,22 +519,24 @@ impl CompactGame for Blackjack {
             | ((u64::from(observation.opponent_card_count)) << 24)
             | ((u64::from(observation.opponent_visible_len)) << 28)
             | ((winner_code as u64) << 32);
-        out.push(header);
+        out.push(header).unwrap();
         out.push(Self::pack_cards(
             &observation.player_cards,
             observation.player_len,
-        ));
+        ))
+        .unwrap();
         out.push(Self::pack_cards(
             &observation.opponent_cards,
             observation.opponent_visible_len,
-        ));
-        out.push(0);
+        ))
+        .unwrap();
+        out.push(0).unwrap();
     }
 
     fn encode_spectator_observation(
         &self,
         observation: &Self::SpectatorObservation,
-        out: &mut Vec<u64>,
+        out: &mut Self::WordBuf,
     ) {
         out.clear();
         let winner_code = match observation.winner {
@@ -427,16 +557,18 @@ impl CompactGame for Blackjack {
             | ((u64::from(observation.opponent_len)) << 24)
             | ((u64::from(observation.opponent_value.total)) << 28)
             | ((winner_code as u64) << 36);
-        out.push(header);
+        out.push(header).unwrap();
         out.push(Self::pack_cards(
             &observation.player_cards,
             observation.player_len,
-        ));
+        ))
+        .unwrap();
         out.push(Self::pack_cards(
             &observation.opponent_cards,
             observation.opponent_len,
-        ));
-        out.push(0);
+        ))
+        .unwrap();
+        out.push(0).unwrap();
     }
 }
 
@@ -444,6 +576,9 @@ impl CompactGame for Blackjack {
 mod tests {
     use super::*;
     use crate::session::Session;
+    use crate::verification::{
+        assert_compact_roundtrip, assert_observation_contracts, assert_transition_contracts,
+    };
 
     fn state_from_hands(player: &[u8], opponent: &[u8]) -> BlackjackState {
         let mut state = BlackjackState {
@@ -456,6 +591,7 @@ mod tests {
             phase: BlackjackPhase::PlayerTurn,
             winner: None,
         };
+        Blackjack::fill_deck(&mut state.deck);
         for &card in player {
             Blackjack::push_player_card(&mut state, card);
         }
@@ -500,9 +636,12 @@ mod tests {
         for card in state.deck {
             counts[card as usize] += 1;
         }
-        for rank in 1..=13 {
+        let mut rank = 1usize;
+        while rank <= 13 {
             assert_eq!(counts[rank], 4, "rank {rank} should appear four times");
+            rank += 1;
         }
+        assert_observation_contracts(&Blackjack, &state);
     }
 
     #[test]
@@ -522,15 +661,106 @@ mod tests {
 
     #[test]
     fn seeded_round_trip_is_reproducible() {
-        let actions = [PlayerAction {
-            player: 0,
-            action: BlackjackAction::Stand,
-        }];
         let mut left = Session::new(Blackjack, 11);
         let mut right = Session::new(Blackjack, 11);
-        left.step(&actions);
-        right.step(&actions);
-        assert_eq!(left.trace(), right.trace());
+        let action = [PlayerAction {
+            player: 0,
+            action: BlackjackAction::Hit,
+        }];
+        let left_outcome = left.step(&action).clone();
+        let right_outcome = right.step(&action).clone();
         assert_eq!(left.state(), right.state());
+        assert_eq!(left_outcome, right_outcome);
+    }
+
+    #[test]
+    fn verification_helpers_hold_for_player_hit() {
+        let game = Blackjack;
+        let state = game.init(11);
+        let mut actions = FixedVec::<PlayerAction<BlackjackAction>, 1>::default();
+        actions
+            .push(PlayerAction {
+                player: 0,
+                action: BlackjackAction::Hit,
+            })
+            .unwrap();
+        assert_transition_contracts(&game, &state, &actions, 11);
+        assert_compact_roundtrip(&game, &BlackjackAction::Hit);
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::{Blackjack, BlackjackAction, BlackjackPhase, HandValue, MAX_HAND_CARDS};
+    use crate::buffer::FixedVec;
+    use crate::game::Game;
+    use crate::types::PlayerAction;
+
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn concrete_seed_shuffle_is_a_full_permutation() {
+        let state = Blackjack.init(11);
+        let mut counts = [0u8; 14];
+        for card in state.deck {
+            counts[card as usize] += 1;
+        }
+        let mut rank = 1usize;
+        while rank <= 13 {
+            assert_eq!(counts[rank], 4);
+            rank += 1;
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn player_observation_hides_opponent_hand_before_terminal() {
+        let state = Blackjack.init(11);
+        let observation = Blackjack.observe_player(&state, 0);
+        if state.phase != BlackjackPhase::Terminal {
+            assert_eq!(observation.opponent_visible_len, 0);
+        }
+    }
+
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn initial_observation_contracts_hold_for_concrete_seed() {
+        let game = Blackjack;
+        let state = game.init(11);
+        crate::verification::assert_observation_contracts(&game, &state);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(64)]
+    fn stand_action_replays_deterministically_for_seed_17() {
+        let state = Blackjack.init(17);
+        let mut actions = FixedVec::<PlayerAction<BlackjackAction>, 1>::default();
+        actions
+            .push(PlayerAction {
+                player: 0,
+                action: BlackjackAction::Stand,
+            })
+            .unwrap();
+        crate::verification::assert_transition_contracts(&Blackjack, &state, &actions, 17);
+    }
+
+    #[kani::proof]
+    #[kani::unwind(32)]
+    fn hand_evaluation_matches_busted_flag() {
+        let len: u8 = kani::any();
+        kani::assume(len <= MAX_HAND_CARDS as u8);
+        let mut cards = [1u8; MAX_HAND_CARDS];
+        for card in &mut cards {
+            *card = kani::any();
+            kani::assume((1..=13).contains(card));
+        }
+        let value = Blackjack::evaluate_hand(&cards, len);
+        assert_eq!(
+            value,
+            HandValue {
+                total: value.total,
+                soft: value.soft,
+                busted: value.total > 21,
+            }
+        );
     }
 }

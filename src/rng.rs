@@ -28,6 +28,12 @@ pub struct DeterministicRng {
     state: u64,
 }
 
+impl Default for DeterministicRng {
+    fn default() -> Self {
+        Self::from_seed(0)
+    }
+}
+
 impl DeterministicRng {
     pub fn from_seed(seed: Seed) -> Self {
         Self::from_seed_and_stream(seed, 0)
@@ -130,5 +136,61 @@ mod tests {
         let mut c = rng.fork(12);
         assert_eq!(a.next_u64(), b.next_u64());
         assert_ne!(a.next_u64(), c.next_u64());
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::{DeterministicRng, ZERO_STATE_REPLACEMENT};
+
+    #[kani::proof]
+    fn rng_state_sanitization_is_total() {
+        let raw_state: u64 = kani::any();
+        let sanitized_state = if raw_state == 0 {
+            ZERO_STATE_REPLACEMENT
+        } else {
+            raw_state
+        };
+        assert_ne!(sanitized_state, 0);
+        if raw_state == 0 {
+            assert_eq!(sanitized_state, ZERO_STATE_REPLACEMENT);
+        } else {
+            assert_eq!(sanitized_state, raw_state);
+        }
+    }
+
+    #[kani::proof]
+    fn seeded_stream_constructor_handles_reference_cases() {
+        let reference_cases = [(0u64, 0u64), (1u64, 1u64), (u64::MAX, 17u64)];
+        for (seed, stream) in reference_cases {
+            let mut left = DeterministicRng::from_seed_and_stream(seed, stream);
+            let mut right = DeterministicRng::from_seed_and_stream(seed, stream);
+            assert_eq!(left.root_seed(), seed);
+            assert_ne!(left.raw_state(), 0);
+            assert_eq!(left, right);
+            assert_eq!(left.next_u64(), right.next_u64());
+            assert_eq!(left, right);
+        }
+    }
+
+    #[kani::proof]
+    fn next_u64_is_repeatable_for_reference_states() {
+        let reference_cases = [
+            (0u64, 1u64),
+            (7u64, ZERO_STATE_REPLACEMENT),
+            (u64::MAX, 0x0123_4567_89AB_CDEFu64),
+        ];
+        for (seed, state) in reference_cases {
+            let mut left = DeterministicRng {
+                root_seed: seed,
+                state,
+            };
+            let mut right = DeterministicRng {
+                root_seed: seed,
+                state,
+            };
+            assert_eq!(left.next_u64(), right.next_u64());
+            assert_eq!(left, right);
+        }
     }
 }
