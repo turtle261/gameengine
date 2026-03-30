@@ -1,4 +1,4 @@
-# gameengine
+# Infotheory Game Engine
 
 `gameengine` is a deterministic, replayable, proof-oriented and object-oriented game engine core for games treated as
 mathematical objects.
