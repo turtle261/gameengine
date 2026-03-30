@@ -183,7 +183,6 @@ impl<G: Game> Clone for ViewCache<G> {
 }
 
 impl<G: Game> ViewCache<G> {
-    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(crate) fn from_session<H: HistoryStore<G>>(session: &SessionKernel<G, H>) -> Self {
         Self {
             tick: session.current_tick(),
@@ -204,7 +203,6 @@ pub struct RenderGameView<'a, G: Game> {
 }
 
 impl<'a, G: Game> RenderGameView<'a, G> {
-    #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(crate) fn from_cache(game: &'a G, cache: &'a ViewCache<G>) -> Self {
         Self { game, cache }
     }
@@ -249,6 +247,52 @@ impl<'a, G: Game> RenderGameView<'a, G> {
     pub fn interpolation_alpha(&self) -> f32 {
         self.cache.interpolation_alpha
     }
+}
+
+/// Renders a single observation-mode scene from an existing session state.
+///
+/// This helper is window-system agnostic and works on `wasm32` targets,
+/// making it suitable for browser integrations that want to reuse built-in
+/// presenters without running the native renderer loop.
+pub fn render_observation_scene<G, H, P>(
+    session: &SessionKernel<G, H>,
+    last_outcome: Option<&StepOutcome<G::RewardBuf>>,
+    presenter: &mut P,
+    metrics: FrameMetrics,
+) -> Scene2d
+where
+    G: Game,
+    H: HistoryStore<G>,
+    P: ObservationPresenter<G>,
+{
+    let mut cache = ViewCache::from_session(session);
+    cache.last_outcome = last_outcome.cloned();
+    let view = RenderGameView::from_cache(session.game(), &cache);
+    let mut scene = Scene2d::default();
+    presenter.populate_scene(&mut scene, metrics, &view);
+    scene
+}
+
+/// Renders a single oracle/world-mode scene from an existing session state.
+///
+/// This helper is window-system agnostic and works on `wasm32` targets.
+pub fn render_oracle_scene<G, H, P>(
+    session: &SessionKernel<G, H>,
+    last_outcome: Option<&StepOutcome<G::RewardBuf>>,
+    presenter: &mut P,
+    metrics: FrameMetrics,
+) -> Scene2d
+where
+    G: Game,
+    H: HistoryStore<G>,
+    P: OraclePresenter<G>,
+{
+    let mut cache = ViewCache::from_session(session);
+    cache.last_outcome = last_outcome.cloned();
+    let view = RenderGameView::from_cache(session.game(), &cache);
+    let mut scene = Scene2d::default();
+    presenter.populate_scene(&mut scene, metrics, &view);
+    scene
 }
 
 #[derive(Debug)]

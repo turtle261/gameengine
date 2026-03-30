@@ -38,7 +38,7 @@ winit = { version = "0.30.12", optional = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2.105", optional = true }
 wasm-bindgen-futures = { version = "0.4.55", optional = true }
-web-sys = { version = "0.3.92", optional = true, features = [
+web-sys = { version = "0.3.91", optional = true, features = [
     "Document",
     "Element",
     "HtmlCanvasElement",

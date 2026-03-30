@@ -181,7 +181,8 @@ offline search, and reproducible experiments.
 ## WASM
 
 The core library is written to remain WASM-compatible. The headless kernel and feature graph are
-kept portable, and the render stack is structured so it can compile for WebAssembly. If you see demos on https://infotheory.tech  -- then you can be sure it works beyond compiling.
+kept portable, and the render stack is structured so it can compile for WebAssembly. 
+It doesn't just compile for WebAssembly, it works! Try the demos at https://infotheory.tech
 
 ## Project Direction
 
