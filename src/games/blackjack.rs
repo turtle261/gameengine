@@ -575,6 +575,7 @@ impl CompactGame for Blackjack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::{FirstLegalPolicy, RandomPolicy};
     use crate::session::Session;
     use crate::verification::{
         assert_compact_roundtrip, assert_observation_contracts, assert_transition_contracts,
@@ -686,6 +687,31 @@ mod tests {
             .unwrap();
         assert_transition_contracts(&game, &state, &actions, 11);
         assert_compact_roundtrip(&game, &BlackjackAction::Hit);
+    }
+
+    #[test]
+    fn seeded_sessions_preserve_invariants_across_policies() {
+        for seed in 1..=256 {
+            let mut first = FirstLegalPolicy;
+            let mut random = RandomPolicy;
+
+            let mut first_session = Session::new(Blackjack, seed);
+            assert!(Blackjack.state_invariant(first_session.state()));
+            let mut first_policies: [&mut dyn crate::policy::Policy<Blackjack>; 1] = [&mut first];
+            while !first_session.is_terminal() && first_session.current_tick() < 16 {
+                first_session.step_with_policies(&mut first_policies);
+            }
+            assert!(Blackjack.state_invariant(first_session.state()));
+
+            let mut random_session = Session::new(Blackjack, seed);
+            assert!(Blackjack.state_invariant(random_session.state()));
+            let mut random_policies: [&mut dyn crate::policy::Policy<Blackjack>; 1] =
+                [&mut random];
+            while !random_session.is_terminal() && random_session.current_tick() < 16 {
+                random_session.step_with_policies(&mut random_policies);
+            }
+            assert!(Blackjack.state_invariant(random_session.state()));
+        }
     }
 }
 

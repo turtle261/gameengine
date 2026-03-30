@@ -1,3 +1,5 @@
+#![cfg(feature = "builtin-games")]
+
 use criterion::{Criterion, criterion_group, criterion_main};
 use gameengine::games::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 #[cfg(feature = "physics")]

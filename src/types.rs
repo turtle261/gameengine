@@ -124,6 +124,49 @@ where
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+pub struct DynamicReplayTrace<JA, R> {
+    pub seed: Seed,
+    pub steps: Vec<ReplayStep<JA, R>>,
+}
+
+impl<JA, R> DynamicReplayTrace<JA, R> {
+    pub fn new(seed: Seed) -> Self {
+        Self {
+            seed,
+            steps: Vec::new(),
+        }
+    }
+
+    pub fn clear(&mut self, seed: Seed) {
+        self.seed = seed;
+        self.steps.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
+}
+
+impl<JA, R> DynamicReplayTrace<JA, R>
+where
+    JA: Clone,
+    R: Clone,
+{
+    pub fn record(&mut self, tick: Tick, actions: &JA, rewards: &R, termination: Termination) {
+        self.steps.push(ReplayStep {
+            tick,
+            actions: actions.clone(),
+            rewards: rewards.clone(),
+            termination,
+        });
+    }
+}
+
 impl<JA, R, const LOG: usize> ReplayTrace<JA, R, LOG>
 where
     JA: Clone + Default,

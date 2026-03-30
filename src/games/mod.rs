@@ -4,11 +4,14 @@ pub mod platformer;
 pub mod tictactoe;
 
 pub use blackjack::{
-    Blackjack, BlackjackAction, BlackjackObservation, BlackjackSpectatorObservation,
-    BlackjackWorldView,
+    Blackjack, BlackjackAction, BlackjackObservation, BlackjackPhase,
+    BlackjackSpectatorObservation, BlackjackWorldView,
 };
 #[cfg(feature = "physics")]
 pub use platformer::{
-    BerryView, Platformer, PlatformerAction, PlatformerObservation, PlatformerWorldView,
+    BerryView, Platformer, PlatformerAction, PlatformerConfig, PlatformerObservation,
+    PlatformerWorldView,
 };
-pub use tictactoe::{TicTacToe, TicTacToeAction, TicTacToeObservation, TicTacToeWorldView};
+pub use tictactoe::{
+    TicTacToe, TicTacToeAction, TicTacToeCell, TicTacToeObservation, TicTacToeWorldView,
+};

@@ -43,6 +43,13 @@ pub struct Contact2d {
     pub b: u16,
 }
 
+pub trait PhysicsOracleView2d {
+    fn bounds(&self) -> Aabb2<StrictF64>;
+    fn tick(&self) -> Tick;
+    fn bodies(&self) -> &[PhysicsBody2d];
+    fn contacts(&self) -> &[Contact2d];
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PhysicsWorld2d<const BODIES: usize, const CONTACTS: usize> {
     pub bounds: Aabb2<StrictF64>,
@@ -240,6 +247,26 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
     }
 }
 
+impl<const BODIES: usize, const CONTACTS: usize> PhysicsOracleView2d
+    for PhysicsWorld2d<BODIES, CONTACTS>
+{
+    fn bounds(&self) -> Aabb2<StrictF64> {
+        self.bounds
+    }
+
+    fn tick(&self) -> Tick {
+        self.tick
+    }
+
+    fn bodies(&self) -> &[PhysicsBody2d] {
+        self.bodies.as_slice()
+    }
+
+    fn contacts(&self) -> &[Contact2d] {
+        self.contacts.as_slice()
+    }
+}
+
 fn intersects(left: Aabb2<StrictF64>, right: Aabb2<StrictF64>) -> bool {
     left.min.x <= right.max.x
         && left.max.x >= right.min.x
@@ -249,7 +276,7 @@ fn intersects(left: Aabb2<StrictF64>, right: Aabb2<StrictF64>) -> bool {
 
 #[cfg(kani)]
 mod proofs {
-    use super::{BodyKind, PhysicsBody2d, PhysicsWorld2d};
+    use super::{BodyKind, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d};
     use crate::math::{Aabb2, StrictF64, Vec2};
 
     #[kani::proof]
@@ -268,5 +295,84 @@ mod proofs {
             active: true,
         });
         assert!(world.invariant());
+    }
+
+    #[kani::proof]
+    #[kani::unwind(8)]
+    fn oracle_view_matches_world_storage() {
+        let bounds = Aabb2::new(
+            Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
+            Vec2::new(StrictF64::new(12.0), StrictF64::new(3.0)),
+        );
+        let mut world = PhysicsWorld2d::<3, 3>::new(bounds);
+        world.add_body(PhysicsBody2d {
+            id: 1,
+            kind: BodyKind::Kinematic,
+            position: Vec2::new(StrictF64::new(1.0), StrictF64::new(1.0)),
+            half_extents: Vec2::new(StrictF64::new(0.5), StrictF64::new(0.5)),
+            active: true,
+        });
+        world.add_body(PhysicsBody2d {
+            id: 2,
+            kind: BodyKind::Trigger,
+            position: Vec2::new(StrictF64::new(1.0), StrictF64::new(1.0)),
+            half_extents: Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
+            active: true,
+        });
+        assert_eq!(world.bounds(), bounds);
+        assert_eq!(world.tick(), 0);
+        assert_eq!(world.bodies(), world.bodies.as_slice());
+        assert_eq!(world.contacts(), world.contacts.as_slice());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BodyKind, Contact2d, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d};
+    use crate::math::{Aabb2, StrictF64, Vec2};
+
+    fn sample_body(id: u16, x: f64, y: f64) -> PhysicsBody2d {
+        PhysicsBody2d {
+            id,
+            kind: BodyKind::Kinematic,
+            position: Vec2::new(StrictF64::new(x), StrictF64::new(y)),
+            half_extents: Vec2::new(StrictF64::new(0.5), StrictF64::new(0.5)),
+            active: true,
+        }
+    }
+
+    #[test]
+    fn refresh_contacts_orders_and_filters_pairs() {
+        let bounds = Aabb2::new(
+            Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
+            Vec2::new(StrictF64::new(8.0), StrictF64::new(8.0)),
+        );
+        let mut world = PhysicsWorld2d::<4, 6>::new(bounds);
+        world.add_body(sample_body(1, 1.0, 1.0));
+        world.add_body(sample_body(2, 1.4, 1.0));
+        world.add_body(sample_body(3, 4.0, 4.0));
+        world.add_body(sample_body(4, 4.4, 4.0));
+        world.set_body_active(4, false);
+        assert_eq!(world.contacts.as_slice(), &[Contact2d { a: 1, b: 2 }]);
+    }
+
+    #[test]
+    fn oracle_view_exposes_world_without_allocation() {
+        let bounds = Aabb2::new(
+            Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
+            Vec2::new(StrictF64::new(6.0), StrictF64::new(6.0)),
+        );
+        let mut world = PhysicsWorld2d::<2, 1>::new(bounds);
+        world.add_body(sample_body(1, 1.0, 1.0));
+        world.add_body(sample_body(2, 1.4, 1.0));
+        world.step();
+
+        assert_eq!(PhysicsOracleView2d::bounds(&world), bounds);
+        assert_eq!(PhysicsOracleView2d::tick(&world), 1);
+        assert_eq!(PhysicsOracleView2d::bodies(&world).len(), 2);
+        assert_eq!(
+            PhysicsOracleView2d::contacts(&world),
+            &[Contact2d { a: 1, b: 2 }]
+        );
     }
 }

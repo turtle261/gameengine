@@ -19,14 +19,26 @@ jobs:
       - name: Default tests
         run: cargo test
 
+      - name: Builtin game tests
+        run: cargo test --features builtin-games
+
       - name: Physics tests
         run: cargo test --features physics
 
       - name: Parallel tests
         run: cargo test --features parallel
 
-      - name: Full feature tests
-        run: cargo test --features "parallel physics"
+      - name: Builtin physics tests
+        run: cargo test --features "builtin-games physics"
+
+      - name: Rendered builtin tests
+        run: cargo test --features "render builtin-games physics"
+
+      - name: Render framework check
+        run: cargo check --features render
+
+      - name: Rendered builtin check
+        run: cargo check --features "render builtin-games"
 
       - name: WASM check
         run: cargo check --target wasm32-unknown-unknown
@@ -34,34 +46,24 @@ jobs:
       - name: WASM physics check
         run: cargo check --target wasm32-unknown-unknown --features physics
 
+      - name: WASM rendered builtin check
+        run: cargo check --target wasm32-unknown-unknown --features "render builtin-games physics"
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Bench compile
-        run: cargo bench --no-run
+        run: cargo bench --no-run --features "builtin-games physics"
 
-      - name: Experimental Rapier compile
-        run: cargo check --features experimental-rapier
-
-  kani-default:
+  kani:
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Run Kani on the default kernel
+      - name: Run Kani proof matrix
         uses: model-checking/kani-github-action@v0.67
         with:
           kani-version: "0.67.0"
-          command: cargo-kani
-          args: "--lib"
-
-  kani-physics:
-    runs-on: ubuntu-20.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run Kani on the physics feature set
-        uses: model-checking/kani-github-action@v0.67
-        with:
-          kani-version: "0.67.0"
-          command: cargo-kani
-          args: "--lib --features physics"
+          command: bash
+          args: "scripts/run-kani.sh"

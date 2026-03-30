@@ -4,7 +4,7 @@ use crate::buffer::{Buffer, default_array};
 use crate::game::Game;
 use crate::policy::Policy;
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, ReplayTrace, Seed, StepOutcome, Tick};
+use crate::types::{DynamicReplayTrace, PlayerAction, ReplayTrace, Seed, StepOutcome, Tick};
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct HistorySnapshot<S> {
@@ -31,6 +31,152 @@ pub trait HistoryStore<G: Game>: Clone {
     fn trace(&self) -> &Self::Trace;
     fn into_trace(self) -> Self::Trace;
     fn restore(&self, game: &G, target_tick: Tick) -> Option<(G::State, DeterministicRng)>;
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct DynamicHistory<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> {
+    seed: Seed,
+    initial_state: G::State,
+    initial_rng: DeterministicRng,
+    trace: DynamicReplayTrace<G::JointActionBuf, G::RewardBuf>,
+    snapshots: Vec<HistorySnapshot<G::State>>,
+}
+
+impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> Clone
+    for DynamicHistory<G, SNAPSHOTS, SNAP_EVERY>
+{
+    fn clone(&self) -> Self {
+        Self {
+            seed: self.seed,
+            initial_state: self.initial_state.clone(),
+            initial_rng: self.initial_rng,
+            trace: self.trace.clone(),
+            snapshots: self.snapshots.clone(),
+        }
+    }
+}
+
+impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize>
+    DynamicHistory<G, SNAPSHOTS, SNAP_EVERY>
+{
+    fn store_snapshot(&mut self, tick: Tick, state: &G::State, rng: DeterministicRng) {
+        if SNAPSHOTS == 0 || SNAP_EVERY == 0 {
+            return;
+        }
+        if !tick.is_multiple_of(SNAP_EVERY as u64) {
+            return;
+        }
+        if self.snapshots.len() == SNAPSHOTS {
+            self.snapshots.remove(0);
+        }
+        self.snapshots.push(HistorySnapshot {
+            tick,
+            state: state.clone(),
+            rng,
+        });
+    }
+
+    fn best_snapshot(&self, target_tick: Tick) -> Option<&HistorySnapshot<G::State>> {
+        self.snapshots
+            .iter()
+            .filter(|snapshot| snapshot.tick <= target_tick)
+            .max_by_key(|snapshot| snapshot.tick)
+    }
+}
+
+impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
+    for DynamicHistory<G, SNAPSHOTS, SNAP_EVERY>
+{
+    type Trace = DynamicReplayTrace<G::JointActionBuf, G::RewardBuf>;
+
+    fn from_seed(seed: Seed, initial_state: &G::State, initial_rng: DeterministicRng) -> Self {
+        let mut snapshots = Vec::with_capacity(SNAPSHOTS);
+        if SNAPSHOTS > 0 {
+            snapshots.push(HistorySnapshot {
+                tick: 0,
+                state: initial_state.clone(),
+                rng: initial_rng,
+            });
+        }
+        Self {
+            seed,
+            initial_state: initial_state.clone(),
+            initial_rng,
+            trace: DynamicReplayTrace::new(seed),
+            snapshots,
+        }
+    }
+
+    fn reset(&mut self, seed: Seed, initial_state: &G::State, initial_rng: DeterministicRng) {
+        self.seed = seed;
+        self.initial_state = initial_state.clone();
+        self.initial_rng = initial_rng;
+        self.trace.clear(seed);
+        self.snapshots.clear();
+        if SNAPSHOTS > 0 {
+            self.snapshots.push(HistorySnapshot {
+                tick: 0,
+                state: initial_state.clone(),
+                rng: initial_rng,
+            });
+        }
+    }
+
+    fn record(
+        &mut self,
+        tick: Tick,
+        state: &G::State,
+        rng: DeterministicRng,
+        actions: &G::JointActionBuf,
+        outcome: &StepOutcome<G::RewardBuf>,
+    ) {
+        self.trace
+            .record(tick, actions, &outcome.rewards, outcome.termination);
+        self.store_snapshot(tick, state, rng);
+    }
+
+    fn len(&self) -> usize {
+        self.trace.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.trace.is_empty()
+    }
+
+    fn trace(&self) -> &Self::Trace {
+        &self.trace
+    }
+
+    fn into_trace(self) -> Self::Trace {
+        self.trace
+    }
+
+    fn restore(&self, game: &G, target_tick: Tick) -> Option<(G::State, DeterministicRng)> {
+        if target_tick > self.trace.len() as u64 {
+            return None;
+        }
+
+        let (mut state, mut rng, start_tick) =
+            if let Some(snapshot) = self.best_snapshot(target_tick) {
+                (snapshot.state.clone(), snapshot.rng, snapshot.tick)
+            } else {
+                (self.initial_state.clone(), self.initial_rng, 0)
+            };
+
+        let mut outcome = StepOutcome::<G::RewardBuf>::default();
+        let mut index = start_tick as usize;
+        while index < self.trace.steps.len() {
+            let step = &self.trace.steps[index];
+            if step.tick > target_tick {
+                break;
+            }
+            outcome.clear();
+            game.step_in_place(&mut state, &step.actions, &mut rng, &mut outcome);
+            index += 1;
+        }
+
+        Some((state, rng))
+    }
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
@@ -201,10 +347,12 @@ pub struct SessionKernel<G: Game, H: HistoryStore<G>> {
 }
 
 pub type Session<G> = SessionKernel<G, FixedHistory<G, 256, 32, 8>>;
+pub type InteractiveSession<G> = SessionKernel<G, DynamicHistory<G, 128, 8>>;
 
 impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     pub fn new(game: G, seed: Seed) -> Self {
         let state = game.init(seed);
+        assert!(game.state_invariant(&state));
         let rng = DeterministicRng::from_seed_and_stream(seed, 1);
         let history = H::from_seed(seed, &state, rng);
         Self {
@@ -404,6 +552,121 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     {
         let mut fork = self.clone();
         fork.rewind_to(target_tick).then_some(fork)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::buffer::FixedVec;
+    use crate::game::Game;
+    use crate::rng::DeterministicRng;
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+
+    use super::{DynamicHistory, SessionKernel};
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct SpinnerGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct SpinnerState {
+        tick: u16,
+    }
+
+    impl Game for SpinnerGame {
+        type State = SpinnerState;
+        type Action = u8;
+        type PlayerObservation = SpinnerState;
+        type SpectatorObservation = SpinnerState;
+        type WorldView = SpinnerState;
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "spinner"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init(&self, _seed: Seed) -> Self::State {
+            SpinnerState { tick: 0 }
+        }
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn observe_player(
+            &self,
+            state: &Self::State,
+            _player: PlayerId,
+        ) -> Self::PlayerObservation {
+            *state
+        }
+
+        fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
+            *state
+        }
+
+        fn world_view(&self, state: &Self::State) -> Self::WorldView {
+            *state
+        }
+
+        fn step_in_place(
+            &self,
+            state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            state.tick += 1;
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 1,
+                })
+                .unwrap();
+            out.termination = Termination::Ongoing;
+        }
+    }
+
+    #[test]
+    fn dynamic_history_records_long_sessions_without_overflow() {
+        type Session = SessionKernel<SpinnerGame, DynamicHistory<SpinnerGame, 16, 4>>;
+
+        let mut session = Session::new(SpinnerGame, 7);
+        let action = [PlayerAction {
+            player: 0,
+            action: 0,
+        }];
+        for _ in 0..600 {
+            session.step(&action);
+        }
+
+        assert_eq!(session.current_tick(), 600);
+        assert_eq!(session.trace().len(), 600);
+        assert_eq!(session.state_at(512), Some(SpinnerState { tick: 512 }));
+        assert!(session.rewind_to(384));
+        assert_eq!(session.state(), &SpinnerState { tick: 384 });
     }
 }
 

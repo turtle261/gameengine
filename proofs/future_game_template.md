@@ -2,6 +2,10 @@
 
 Use this checklist when adding a new builtin or first-party game.
 
+If the game is intended to ship as a first-party reference environment, gate it behind the
+`builtin-games` feature. Rendering stays outside the proof claim; only the pure game kernel,
+world view, compact codec, and physics hooks belong in the verification checklist.
+
 ## Runtime Checklist
 
 - Add a deterministic smoke test from `init(seed)` through a fixed action trace.

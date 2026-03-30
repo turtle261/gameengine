@@ -2,7 +2,7 @@ use crate::buffer::{FixedVec, default_array};
 use crate::compact::{CompactGame, CompactSpec};
 use crate::game::Game;
 use crate::math::{Aabb2, StrictF64, Vec2};
-use crate::physics::{BodyKind, PhysicsBody2d, PhysicsWorld2d};
+use crate::physics::{BodyKind, Contact2d, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d};
 use crate::rng::DeterministicRng;
 use crate::types::{PlayerAction, PlayerId, PlayerReward, Reward, Seed, StepOutcome, Termination};
 
@@ -155,6 +155,24 @@ impl Default for PlatformerState {
 impl Default for PlatformerWorldView {
     fn default() -> Self {
         Platformer::default().world_view(&Platformer::default().init(0))
+    }
+}
+
+impl PhysicsOracleView2d for PlatformerWorldView {
+    fn bounds(&self) -> Aabb2<StrictF64> {
+        self.physics.bounds()
+    }
+
+    fn tick(&self) -> u64 {
+        self.physics.tick()
+    }
+
+    fn bodies(&self) -> &[PhysicsBody2d] {
+        self.physics.bodies()
+    }
+
+    fn contacts(&self) -> &[Contact2d] {
+        self.physics.contacts()
     }
 }
 

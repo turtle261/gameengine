@@ -1,8 +1,7 @@
 pub mod buffer;
 pub mod compact;
-#[cfg(feature = "experimental-rapier")]
-pub mod experimental_rapier;
 pub mod game;
+#[cfg(feature = "builtin-games")]
 pub mod games;
 pub mod math;
 #[cfg(feature = "parallel")]
@@ -10,6 +9,8 @@ pub mod parallel;
 #[cfg(feature = "physics")]
 pub mod physics;
 pub mod policy;
+#[cfg(feature = "render")]
+pub mod render;
 pub mod rng;
 pub mod session;
 pub mod types;
@@ -20,8 +21,11 @@ pub use compact::{CompactGame, CompactSpec};
 pub use game::Game;
 pub use policy::{FirstLegalPolicy, FnPolicy, Policy, RandomPolicy, ScriptedPolicy};
 pub use rng::{DeterministicRng, SplitMix64};
-pub use session::{FixedHistory, HistorySnapshot, HistoryStore, Session, SessionKernel};
+pub use session::{
+    DynamicHistory, FixedHistory, HistorySnapshot, HistoryStore, InteractiveSession, Session,
+    SessionKernel,
+};
 pub use types::{
-    PlayerAction, PlayerId, PlayerReward, ReplayStep, ReplayTrace, Reward, Seed, StepOutcome,
-    Termination, Tick, stable_hash,
+    DynamicReplayTrace, PlayerAction, PlayerId, PlayerReward, ReplayStep, ReplayTrace, Reward,
+    Seed, StepOutcome, Termination, Tick, stable_hash,
 };

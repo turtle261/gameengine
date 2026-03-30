@@ -1,3 +1,5 @@
+#![cfg(feature = "builtin-games")]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::Mutex;
