@@ -3,6 +3,10 @@ name = "gameengine"
 version = "0.1.0"
 edition = "2024"
 autobins = false
+license = "ISC"
+description = " A formally verified, deterministic, reversible game/simulation kernel designed as the reference environment layer for Infotheory."
+repository = "https://github.com/turtle261/gameengine"
+homepage = "https://infotheory.tech/gameengine.html"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
