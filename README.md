@@ -74,7 +74,9 @@ bash scripts/run-kani.sh
 - `physics`
   - engine-owned deterministic 2D physics types and proofs
 - `builtin-games`
-  - reference environments and the CLI binary
+  - reference environments only
+- `cli`
+  - opt-in command-line binary (`gameengine`), depends on `builtin-games`
 - `parallel`
   - batch-simulation helpers for independent runs
 - `render`
@@ -144,14 +146,15 @@ Because the kernel is tick-based, the same game can be:
 
 ## CLI
 
-The CLI is available when `builtin-games` is enabled.
+The CLI is available when `cli` is enabled.
+`cli` automatically enables `builtin-games`.
 
 ```bash
-cargo run --features builtin-games -- list
-cargo run --features builtin-games -- play tictactoe --policy human
-cargo run --features builtin-games -- play blackjack --policy script:hit,stand
-cargo run --features "builtin-games physics render" -- play platformer --render
-cargo run --features "builtin-games physics render" -- play platformer --render-physics --debug-overlay
+cargo run --features cli -- list
+cargo run --features cli -- play tictactoe --policy human
+cargo run --features cli -- play blackjack --policy script:hit,stand
+cargo run --features "cli physics render" -- play platformer --render
+cargo run --features "cli physics render" -- play platformer --render-physics --debug-overlay
 ```
 
 Useful flags:

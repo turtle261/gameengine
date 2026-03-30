@@ -40,6 +40,12 @@ jobs:
       - name: Rendered builtin check
         run: cargo check --features "render builtin-games"
 
+      - name: CLI check
+        run: cargo check --bin gameengine --features cli
+
+      - name: Rendered CLI check
+        run: cargo check --bin gameengine --features "cli physics render"
+
       - name: WASM check
         run: cargo check --target wasm32-unknown-unknown
 

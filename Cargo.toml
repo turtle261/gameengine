@@ -15,6 +15,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 default = []
 physics = []
 builtin-games = []
+cli = ["builtin-games"]
 parallel = ["dep:rayon"]
 render = [
     "dep:bytemuck",
@@ -51,7 +52,7 @@ criterion = { version = "0.5.1", default-features = false, features = ["cargo_be
 [[bin]]
 name = "gameengine"
 path = "src/main.rs"
-required-features = ["builtin-games"]
+required-features = ["cli"]
 
 [[bench]]
 name = "step_throughput"
