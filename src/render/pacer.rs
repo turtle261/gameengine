@@ -38,8 +38,7 @@ impl TickPacer {
     }
 
     pub fn interpolation_alpha(&self) -> f32 {
-        (self.accumulator_seconds / self.tick_period_seconds)
-            .clamp(0.0, 1.0) as f32
+        (self.accumulator_seconds / self.tick_period_seconds).clamp(0.0, 1.0) as f32
     }
 }
 
@@ -66,9 +65,6 @@ mod tests {
         let start = Instant::now();
         let mut pacer = TickPacer::new(60.0, 3);
         assert_eq!(pacer.consume_due_ticks(start), 0);
-        assert_eq!(
-            pacer.consume_due_ticks(start + Duration::from_secs(2)),
-            3
-        );
+        assert_eq!(pacer.consume_due_ticks(start + Duration::from_secs(2)), 3);
     }
 }

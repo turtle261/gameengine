@@ -10,19 +10,19 @@ use std::time::Instant;
 use bytemuck::{Pod, Zeroable};
 #[cfg(not(target_arch = "wasm32"))]
 use glyphon::{
-    Attrs, Buffer as GlyphBuffer, Cache, Color as GlyphColor, Family, Metrics, Resolution,
-    Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer as GlyphBuffer, Cache, Color as GlyphColor, Family, Metrics, Resolution, Shaping,
+    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use wgpu::{
     BlendState, Buffer, BufferDescriptor, BufferUsages, ColorTargetState, ColorWrites,
-    CommandEncoderDescriptor, CompositeAlphaMode, Device, DeviceDescriptor, Features, FragmentState,
-    Instance, InstanceDescriptor, LoadOp, MultisampleState, Operations, PipelineCompilationOptions,
-    PipelineLayoutDescriptor, PolygonMode, PresentMode, PrimitiveState, PrimitiveTopology, Queue,
-    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, StoreOp, Surface,
-    SurfaceConfiguration, TextureFormat, TextureUsages, TextureViewDescriptor, VertexAttribute,
-    VertexBufferLayout, VertexState, VertexStepMode,
+    CommandEncoderDescriptor, CompositeAlphaMode, Device, DeviceDescriptor, Features,
+    FragmentState, Instance, InstanceDescriptor, LoadOp, MultisampleState, Operations,
+    PipelineCompilationOptions, PipelineLayoutDescriptor, PolygonMode, PresentMode, PrimitiveState,
+    PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, StoreOp,
+    Surface, SurfaceConfiguration, TextureFormat, TextureUsages, TextureViewDescriptor,
+    VertexAttribute, VertexBufferLayout, VertexState, VertexStepMode,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use winit::application::ApplicationHandler;
@@ -238,7 +238,8 @@ impl<'a, G: Game> RenderGameView<'a, G> {
     }
 
     pub fn reward_for(&self, player: usize) -> Reward {
-        self.last_outcome().map_or(0, |outcome| outcome.reward_for(player))
+        self.last_outcome()
+            .map_or(0, |outcome| outcome.reward_for(player))
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -384,15 +385,11 @@ impl<G: Game, H: HistoryStore<G>, P: Policy<G>> PassivePolicyDriver<G, H, P> {
     }
 }
 
-impl<G: Game, H: HistoryStore<G>, P: Policy<G>> ActionSink<G>
-    for PassivePolicyDriver<G, H, P>
-{
+impl<G: Game, H: HistoryStore<G>, P: Policy<G>> ActionSink<G> for PassivePolicyDriver<G, H, P> {
     fn submit_command(&mut self, _command: ActionCommand<G::Action>) {}
 }
 
-impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G>
-    for PassivePolicyDriver<G, H, P>
-{
+impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G> for PassivePolicyDriver<G, H, P> {
     type History = H;
 
     fn session(&self) -> &SessionKernel<G, H> {
@@ -847,7 +844,8 @@ impl GpuState {
         let cache = Cache::new(&device);
         let viewport = Viewport::new(&device, &cache);
         let mut atlas = TextAtlas::new(&device, &queue, &cache, surface_format);
-        let text_renderer = TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
+        let text_renderer =
+            TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
         let text_buffers = Vec::with_capacity(16);
         surface_config.width = surface_config.width.max(1);
         surface_config.height = surface_config.height.max(1);
@@ -901,8 +899,11 @@ impl GpuState {
         self.ensure_vertex_capacity()?;
 
         if !self.staging_vertices.is_empty() {
-            self.queue
-                .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.staging_vertices));
+            self.queue.write_buffer(
+                &self.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.staging_vertices),
+            );
         }
 
         let frame = match self.surface.get_current_texture() {
@@ -1037,7 +1038,10 @@ impl GpuState {
     fn prepare_geometry(&mut self, scene: &Scene2d) {
         self.staging_vertices.clear();
         let mut geometry = Vec::with_capacity(
-            scene.panels.len() + scene.lines.len() + scene.circles.len() + scene.textured_quads.len(),
+            scene.panels.len()
+                + scene.lines.len()
+                + scene.circles.len()
+                + scene.textured_quads.len(),
         );
         for panel in &scene.panels {
             geometry.push(GeometryPrimitive::Panel(panel));
@@ -1056,7 +1060,13 @@ impl GpuState {
         for primitive in geometry {
             match primitive {
                 GeometryPrimitive::Panel(panel) => {
-                    push_rect(&mut self.staging_vertices, panel.rect, panel.fill, self.surface_config.width, self.surface_config.height);
+                    push_rect(
+                        &mut self.staging_vertices,
+                        panel.rect,
+                        panel.fill,
+                        self.surface_config.width,
+                        self.surface_config.height,
+                    );
                     if let Some((stroke, thickness)) = panel.stroke {
                         push_stroked_rect(
                             &mut self.staging_vertices,
@@ -1140,13 +1150,7 @@ struct GpuVertex {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn push_rect(
-    out: &mut Vec<GpuVertex>,
-    rect: Rect,
-    color: Color,
-    width: u32,
-    height: u32,
-) {
+fn push_rect(out: &mut Vec<GpuVertex>, rect: Rect, color: Color, width: u32, height: u32) {
     let top_left = to_ndc(rect.left(), rect.top(), width, height);
     let top_right = to_ndc(rect.right(), rect.top(), width, height);
     let bottom_left = to_ndc(rect.left(), rect.bottom(), width, height);
@@ -1189,7 +1193,13 @@ fn push_stroked_rect(
     width: u32,
     height: u32,
 ) {
-    push_rect(out, Rect::new(rect.x, rect.y, rect.width, thickness), color, width, height);
+    push_rect(
+        out,
+        Rect::new(rect.x, rect.y, rect.width, thickness),
+        color,
+        width,
+        height,
+    );
     push_rect(
         out,
         Rect::new(rect.x, rect.bottom() - thickness, rect.width, thickness),
@@ -1197,7 +1207,13 @@ fn push_stroked_rect(
         width,
         height,
     );
-    push_rect(out, Rect::new(rect.x, rect.y, thickness, rect.height), color, width, height);
+    push_rect(
+        out,
+        Rect::new(rect.x, rect.y, thickness, rect.height),
+        color,
+        width,
+        height,
+    );
     push_rect(
         out,
         Rect::new(rect.right() - thickness, rect.y, thickness, rect.height),
@@ -1251,7 +1267,12 @@ fn push_line(out: &mut Vec<GpuVertex>, line: LineCommand, width: u32, height: u3
 
 #[cfg(not(target_arch = "wasm32"))]
 fn push_circle(out: &mut Vec<GpuVertex>, circle: CircleCommand, width: u32, height: u32) {
-    let color = [circle.color.r, circle.color.g, circle.color.b, circle.color.a];
+    let color = [
+        circle.color.r,
+        circle.color.g,
+        circle.color.b,
+        circle.color.a,
+    ];
     let center = to_ndc(circle.center.x, circle.center.y, width, height);
     let segments = 24usize;
     for index in 0..segments {
@@ -1357,13 +1378,22 @@ mod tests {
             }
         }
 
-        fn legal_actions(&self, _state: &Self::State, _player: PlayerId, out: &mut Self::ActionBuf) {
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
             out.clear();
             out.push(0).unwrap();
             out.push(1).unwrap();
         }
 
-        fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::PlayerObservation {
+        fn observe_player(
+            &self,
+            state: &Self::State,
+            _player: PlayerId,
+        ) -> Self::PlayerObservation {
             *state
         }
 

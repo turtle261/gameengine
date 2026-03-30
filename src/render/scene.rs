@@ -195,13 +195,7 @@ impl Scene2d {
         self.clear_color = color;
     }
 
-    pub fn panel(
-        &mut self,
-        rect: Rect,
-        fill: Color,
-        stroke: Option<(Color, f32)>,
-        layer: i32,
-    ) {
+    pub fn panel(&mut self, rect: Rect, fill: Color, stroke: Option<(Color, f32)>, layer: i32) {
         self.panels.push(PanelRegion {
             rect,
             fill,

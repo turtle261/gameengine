@@ -1,6 +1,8 @@
 use std::env;
 use std::io::{self, Write};
 
+#[cfg(feature = "render")]
+use gameengine::InteractiveSession;
 use gameengine::buffer::Buffer;
 use gameengine::games::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 #[cfg(feature = "physics")]
@@ -13,8 +15,6 @@ use gameengine::render::{
 #[cfg(all(feature = "render", feature = "physics"))]
 use gameengine::render::{RealtimeDriver, builtin};
 use gameengine::{CompactGame, Game, Session, stable_hash};
-#[cfg(feature = "render")]
-use gameengine::InteractiveSession;
 
 fn main() {
     if let Err(error) = run() {
@@ -318,14 +318,20 @@ fn run_tictactoe_render(config: CliConfig) -> Result<(), String> {
         .map_err(|error| error.to_string()),
         "random" => RendererApp::new(
             render_config,
-            PassivePolicyDriver::new(InteractiveSession::new(TicTacToe, config.seed), RandomPolicy),
+            PassivePolicyDriver::new(
+                InteractiveSession::new(TicTacToe, config.seed),
+                RandomPolicy,
+            ),
             TicTacToePresenter::default(),
         )
         .run_native()
         .map_err(|error| error.to_string()),
         "first" => RendererApp::new(
             render_config,
-            PassivePolicyDriver::new(InteractiveSession::new(TicTacToe, config.seed), FirstLegalPolicy),
+            PassivePolicyDriver::new(
+                InteractiveSession::new(TicTacToe, config.seed),
+                FirstLegalPolicy,
+            ),
             TicTacToePresenter::default(),
         )
         .run_native()
@@ -359,14 +365,20 @@ fn run_blackjack_render(config: CliConfig) -> Result<(), String> {
         .map_err(|error| error.to_string()),
         "random" => RendererApp::new(
             render_config,
-            PassivePolicyDriver::new(InteractiveSession::new(Blackjack, config.seed), RandomPolicy),
+            PassivePolicyDriver::new(
+                InteractiveSession::new(Blackjack, config.seed),
+                RandomPolicy,
+            ),
             BlackjackPresenter::default(),
         )
         .run_native()
         .map_err(|error| error.to_string()),
         "first" => RendererApp::new(
             render_config,
-            PassivePolicyDriver::new(InteractiveSession::new(Blackjack, config.seed), FirstLegalPolicy),
+            PassivePolicyDriver::new(
+                InteractiveSession::new(Blackjack, config.seed),
+                FirstLegalPolicy,
+            ),
             BlackjackPresenter::default(),
         )
         .run_native()
@@ -399,7 +411,10 @@ fn run_platformer_render(config: CliConfig) -> Result<(), String> {
         match config.policy.as_str() {
             "human" => RendererApp::new(
                 render_config,
-                RealtimeDriver::new(InteractiveSession::new(game, config.seed), PlatformerAction::Stay),
+                RealtimeDriver::new(
+                    InteractiveSession::new(game, config.seed),
+                    PlatformerAction::Stay,
+                ),
                 builtin::PlatformerPhysicsPresenter::new(game.config),
             )
             .run_native()
@@ -413,7 +428,10 @@ fn run_platformer_render(config: CliConfig) -> Result<(), String> {
             .map_err(|error| error.to_string()),
             "first" => RendererApp::new(
                 render_config,
-                PassivePolicyDriver::new(InteractiveSession::new(game, config.seed), FirstLegalPolicy),
+                PassivePolicyDriver::new(
+                    InteractiveSession::new(game, config.seed),
+                    FirstLegalPolicy,
+                ),
                 builtin::PlatformerPhysicsPresenter::new(game.config),
             )
             .run_native()
@@ -434,7 +452,10 @@ fn run_platformer_render(config: CliConfig) -> Result<(), String> {
         match config.policy.as_str() {
             "human" => RendererApp::new(
                 render_config,
-                RealtimeDriver::new(InteractiveSession::new(game, config.seed), PlatformerAction::Stay),
+                RealtimeDriver::new(
+                    InteractiveSession::new(game, config.seed),
+                    PlatformerAction::Stay,
+                ),
                 builtin::PlatformerPresenter::default(),
             )
             .run_native()
@@ -448,7 +469,10 @@ fn run_platformer_render(config: CliConfig) -> Result<(), String> {
             .map_err(|error| error.to_string()),
             "first" => RendererApp::new(
                 render_config,
-                PassivePolicyDriver::new(InteractiveSession::new(game, config.seed), FirstLegalPolicy),
+                PassivePolicyDriver::new(
+                    InteractiveSession::new(game, config.seed),
+                    FirstLegalPolicy,
+                ),
                 builtin::PlatformerPresenter::default(),
             )
             .run_native()
@@ -474,9 +498,7 @@ fn print_usage() {
     println!(
         "  gameengine play <game> [--seed N] [--max-steps N] [--policy human|random|first|script:...]"
     );
-    println!(
-        "  gameengine replay <game> [--seed N] [--max-steps N] [--policy script:...]"
-    );
+    println!("  gameengine replay <game> [--seed N] [--max-steps N] [--policy script:...]");
     println!("  gameengine validate");
     println!("optional rendering flags:");
     println!("  --render");

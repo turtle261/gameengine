@@ -705,8 +705,7 @@ mod tests {
 
             let mut random_session = Session::new(Blackjack, seed);
             assert!(Blackjack.state_invariant(random_session.state()));
-            let mut random_policies: [&mut dyn crate::policy::Policy<Blackjack>; 1] =
-                [&mut random];
+            let mut random_policies: [&mut dyn crate::policy::Policy<Blackjack>; 1] = [&mut random];
             while !random_session.is_terminal() && random_session.current_tick() < 16 {
                 random_session.step_with_policies(&mut random_policies);
             }

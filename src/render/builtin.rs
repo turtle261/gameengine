@@ -6,19 +6,17 @@ use crate::games::{
     TicTacToeCell, TicTacToeObservation,
 };
 #[cfg(feature = "physics")]
-use crate::games::{
-    Platformer, PlatformerAction, PlatformerConfig, PlatformerObservation,
-};
+use crate::games::{Platformer, PlatformerAction, PlatformerConfig, PlatformerObservation};
 #[cfg(feature = "physics")]
 use crate::physics::PhysicsOracleView2d;
 
+#[cfg(feature = "physics")]
+use super::OraclePresenter;
+use super::scene::Color;
 use super::{
     ActionCommand, ActionSink, FrameMetrics, ObservationPresenter, Point2, Presenter, Rect,
     RenderGameView, Scene2d,
 };
-#[cfg(feature = "physics")]
-use super::OraclePresenter;
-use super::scene::Color;
 
 const BG: Color = Color::from_rgb8(17, 24, 39);
 const PANEL: Color = Color::from_rgb8(30, 41, 59);
@@ -39,12 +37,7 @@ pub struct TicTacToePresenter {
 impl TicTacToePresenter {
     fn board_rect(metrics: FrameMetrics) -> Rect {
         let size = metrics.width.min(metrics.height) as f32 * 0.66;
-        Rect::new(
-            (metrics.width as f32 - size) * 0.5,
-            72.0,
-            size,
-            size,
-        )
+        Rect::new((metrics.width as f32 - size) * 0.5, 72.0, size, size)
     }
 
     fn cell_rect(metrics: FrameMetrics, index: usize) -> Rect {
@@ -103,18 +96,28 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                let index = match event.physical_key {
-                    PhysicalKey::Code(KeyCode::Digit1) | PhysicalKey::Code(KeyCode::Numpad1) => Some(0),
-                    PhysicalKey::Code(KeyCode::Digit2) | PhysicalKey::Code(KeyCode::Numpad2) => Some(1),
-                    PhysicalKey::Code(KeyCode::Digit3) | PhysicalKey::Code(KeyCode::Numpad3) => Some(2),
-                    PhysicalKey::Code(KeyCode::Digit4) | PhysicalKey::Code(KeyCode::Numpad4) => Some(3),
-                    PhysicalKey::Code(KeyCode::Digit5) | PhysicalKey::Code(KeyCode::Numpad5) => Some(4),
-                    PhysicalKey::Code(KeyCode::Digit6) | PhysicalKey::Code(KeyCode::Numpad6) => Some(5),
-                    PhysicalKey::Code(KeyCode::Digit7) | PhysicalKey::Code(KeyCode::Numpad7) => Some(6),
-                    PhysicalKey::Code(KeyCode::Digit8) | PhysicalKey::Code(KeyCode::Numpad8) => Some(7),
-                    PhysicalKey::Code(KeyCode::Digit9) | PhysicalKey::Code(KeyCode::Numpad9) => Some(8),
-                    _ => None,
-                };
+                let index =
+                    match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Digit1)
+                        | PhysicalKey::Code(KeyCode::Numpad1) => Some(0),
+                        PhysicalKey::Code(KeyCode::Digit2)
+                        | PhysicalKey::Code(KeyCode::Numpad2) => Some(1),
+                        PhysicalKey::Code(KeyCode::Digit3)
+                        | PhysicalKey::Code(KeyCode::Numpad3) => Some(2),
+                        PhysicalKey::Code(KeyCode::Digit4)
+                        | PhysicalKey::Code(KeyCode::Numpad4) => Some(3),
+                        PhysicalKey::Code(KeyCode::Digit5)
+                        | PhysicalKey::Code(KeyCode::Numpad5) => Some(4),
+                        PhysicalKey::Code(KeyCode::Digit6)
+                        | PhysicalKey::Code(KeyCode::Numpad6) => Some(5),
+                        PhysicalKey::Code(KeyCode::Digit7)
+                        | PhysicalKey::Code(KeyCode::Numpad7) => Some(6),
+                        PhysicalKey::Code(KeyCode::Digit8)
+                        | PhysicalKey::Code(KeyCode::Numpad8) => Some(7),
+                        PhysicalKey::Code(KeyCode::Digit9)
+                        | PhysicalKey::Code(KeyCode::Numpad9) => Some(8),
+                        _ => None,
+                    };
                 if let Some(index) = index {
                     self.submit_index(actions, index);
                 }
@@ -133,7 +136,12 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
         let observation = view.player_observation();
         let board = Self::board_rect(metrics);
         scene.panel(
-            Rect::new(32.0, 24.0, metrics.width as f32 - 64.0, metrics.height as f32 - 48.0),
+            Rect::new(
+                32.0,
+                24.0,
+                metrics.width as f32 - 64.0,
+                metrics.height as f32 - 48.0,
+            ),
             PANEL_ALT,
             Some((ACCENT, 2.0)),
             0,
@@ -200,7 +208,12 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
         );
         scene.text(
             Point2::new(54.0, metrics.height as f32 - 148.0),
-            Rect::new(54.0, metrics.height as f32 - 148.0, metrics.width as f32 - 108.0, 96.0),
+            Rect::new(
+                54.0,
+                metrics.height as f32 - 148.0,
+                metrics.width as f32 - 108.0,
+                96.0,
+            ),
             tictactoe_status(observation, view.reward_for(0), view.tick()),
             22.0,
             MUTED,
@@ -259,7 +272,9 @@ impl Presenter<Blackjack> for BlackjackPresenter {
                 button: MouseButton::Left,
                 ..
             } => {
-                if view.player_observation().phase == BlackjackPhase::PlayerTurn && !view.is_terminal() {
+                if view.player_observation().phase == BlackjackPhase::PlayerTurn
+                    && !view.is_terminal()
+                {
                     if Self::hit_button(metrics).contains(self.cursor) {
                         self.submit(actions, BlackjackAction::Hit);
                     } else if Self::stand_button(metrics).contains(self.cursor) {
@@ -272,7 +287,9 @@ impl Presenter<Blackjack> for BlackjackPresenter {
                     PhysicalKey::Code(KeyCode::KeyH) => self.submit(actions, BlackjackAction::Hit),
                     PhysicalKey::Code(KeyCode::KeyS)
                     | PhysicalKey::Code(KeyCode::Enter)
-                    | PhysicalKey::Code(KeyCode::Space) => self.submit(actions, BlackjackAction::Stand),
+                    | PhysicalKey::Code(KeyCode::Space) => {
+                        self.submit(actions, BlackjackAction::Stand)
+                    }
                     _ => {}
                 }
             }
@@ -288,7 +305,12 @@ impl Presenter<Blackjack> for BlackjackPresenter {
     ) {
         scene.set_clear_color(Color::from_rgb8(6, 24, 24));
         scene.panel(
-            Rect::new(24.0, 24.0, metrics.width as f32 - 48.0, metrics.height as f32 - 48.0),
+            Rect::new(
+                24.0,
+                24.0,
+                metrics.width as f32 - 48.0,
+                metrics.height as f32 - 48.0,
+            ),
             Color::from_rgb8(11, 42, 42),
             Some((ACCENT_WARM, 2.0)),
             0,
@@ -308,13 +330,22 @@ impl Presenter<Blackjack> for BlackjackPresenter {
         let player_origin = Point2::new(64.0, 360.0);
         for index in 0..observation.opponent_card_count as usize {
             let rect = Self::card_rect(opponent_origin, index);
-            let hidden = index >= observation.opponent_visible_len as usize && !observation.terminal;
+            let hidden =
+                index >= observation.opponent_visible_len as usize && !observation.terminal;
             draw_card(
                 scene,
                 rect,
-                if hidden { None } else { Some(observation.opponent_cards[index]) },
+                if hidden {
+                    None
+                } else {
+                    Some(observation.opponent_cards[index])
+                },
                 if hidden { "?" } else { "" },
-                if hidden { PANEL_ALT } else { Color::from_rgb8(245, 248, 255) },
+                if hidden {
+                    PANEL_ALT
+                } else {
+                    Color::from_rgb8(245, 248, 255)
+                },
             );
         }
         for index in 0..observation.player_len as usize {
@@ -394,7 +425,12 @@ impl PlatformerPresenter {
     }
 
     fn world_rect(metrics: FrameMetrics) -> Rect {
-        Rect::new(72.0, 96.0, metrics.width as f32 - 144.0, metrics.height as f32 - 224.0)
+        Rect::new(
+            72.0,
+            96.0,
+            metrics.width as f32 - 144.0,
+            metrics.height as f32 - 224.0,
+        )
     }
 
     fn unit_rect(metrics: FrameMetrics, config: PlatformerConfig, x: u8, y: u8) -> Rect {
@@ -502,7 +538,12 @@ impl Presenter<Platformer> for PlatformerPresenter {
         );
         scene.text(
             Point2::new(72.0, metrics.height as f32 - 92.0),
-            Rect::new(72.0, metrics.height as f32 - 92.0, metrics.width as f32 - 144.0, 72.0),
+            Rect::new(
+                72.0,
+                metrics.height as f32 - 92.0,
+                metrics.width as f32 - 144.0,
+                72.0,
+            ),
             platformer_status(observation, view.reward_for(0), view.tick()),
             22.0,
             MUTED,
@@ -563,7 +604,12 @@ impl Presenter<Platformer> for PlatformerPhysicsPresenter {
         let bounds = world.physics.bounds();
         let bodies = world.physics.bodies();
         let contacts = world.physics.contacts();
-        let frame = Rect::new(48.0, 72.0, metrics.width as f32 - 96.0, metrics.height as f32 - 180.0);
+        let frame = Rect::new(
+            48.0,
+            72.0,
+            metrics.width as f32 - 96.0,
+            metrics.height as f32 - 180.0,
+        );
         scene.panel(frame, PANEL_ALT, Some((ACCENT_WARM, 2.0)), 0);
 
         for body in bodies {
@@ -591,7 +637,9 @@ impl Presenter<Platformer> for PlatformerPhysicsPresenter {
         }
 
         for contact in contacts {
-            if let (Some(a), Some(b)) = (world.physics.body(contact.a), world.physics.body(contact.b)) {
+            if let (Some(a), Some(b)) =
+                (world.physics.body(contact.a), world.physics.body(contact.b))
+            {
                 let a_rect = physics_rect(
                     frame,
                     bounds,
@@ -622,7 +670,12 @@ impl Presenter<Platformer> for PlatformerPhysicsPresenter {
         );
         scene.text(
             Point2::new(56.0, metrics.height as f32 - 88.0),
-            Rect::new(56.0, metrics.height as f32 - 88.0, metrics.width as f32 - 112.0, 72.0),
+            Rect::new(
+                56.0,
+                metrics.height as f32 - 88.0,
+                metrics.width as f32 - 112.0,
+                72.0,
+            ),
             format!(
                 "{}\nphysics bodies={} contacts={} physics_tick={}",
                 platformer_status(view.player_observation(), view.reward_for(0), view.tick()),
@@ -673,7 +726,11 @@ fn blackjack_status(observation: &BlackjackObservation, reward: i64, tick: u64) 
     format!(
         "phase={phase}\nstatus={winner}\nplayer total={}{}\nopponent visible={} card(s)\nreward={reward}\ntick={tick}",
         observation.player_value.total,
-        if observation.player_value.soft { " soft" } else { "" },
+        if observation.player_value.soft {
+            " soft"
+        } else {
+            ""
+        },
         observation.opponent_visible_len
     )
 }
@@ -682,18 +739,13 @@ fn blackjack_status(observation: &BlackjackObservation, reward: i64, tick: u64) 
 fn platformer_status(observation: &PlatformerObservation, reward: i64, tick: u64) -> String {
     format!(
         "x={} y={}\nremaining_berries={:#08b}\nreward={reward}\ntick={tick}\nterminal={}",
-        observation.x,
-        observation.y,
-        observation.remaining_berries,
-        observation.terminal
+        observation.x, observation.y, observation.remaining_berries, observation.terminal
     )
 }
 
 fn draw_card(scene: &mut Scene2d, rect: Rect, card: Option<u8>, fallback: &str, fill: Color) {
     scene.panel(rect, fill, Some((PANEL, 2.0)), 10);
-    let label = card
-        .map(card_label)
-        .unwrap_or_else(|| fallback.to_string());
+    let label = card.map(card_label).unwrap_or_else(|| fallback.to_string());
     let label_color = if card.is_some() { PANEL } else { TEXT };
     scene.text(
         Point2::new(rect.x + 16.0, rect.y + 18.0),
@@ -743,8 +795,8 @@ mod tests {
     };
     use crate::games::{Blackjack, Platformer, TicTacToe};
     use crate::render::{
-        FrameMetrics, Presenter, RenderGameView, Scene2d, TickDriver, TurnBasedDriver,
-        RealtimeDriver,
+        FrameMetrics, Presenter, RealtimeDriver, RenderGameView, Scene2d, TickDriver,
+        TurnBasedDriver,
     };
     use crate::session::Session;
 
