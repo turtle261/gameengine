@@ -13,6 +13,7 @@ impl SplitMix64 {
         Self { state: seed }
     }
 
+    #[inline(always)]
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(STREAM_XOR);
         let mut z = self.state;
@@ -35,10 +36,12 @@ impl Default for DeterministicRng {
 }
 
 impl DeterministicRng {
+    #[inline]
     pub fn from_seed(seed: Seed) -> Self {
         Self::from_seed_and_stream(seed, 0)
     }
 
+    #[inline]
     pub fn from_seed_and_stream(seed: Seed, stream_id: u64) -> Self {
         let mut mixer = SplitMix64::new(seed ^ stream_id.wrapping_mul(STREAM_XOR));
         let state = sanitize_state(mixer.next_u64());
@@ -56,10 +59,12 @@ impl DeterministicRng {
         self.state
     }
 
+    #[inline]
     pub fn fork(&self, stream_id: u64) -> Self {
         Self::from_seed_and_stream(self.root_seed, stream_id)
     }
 
+    #[inline(always)]
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x >> 12;
@@ -69,6 +74,7 @@ impl DeterministicRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
 
+    #[inline(always)]
     pub fn gen_range(&mut self, end: usize) -> usize {
         if end <= 1 {
             return 0;
@@ -83,6 +89,7 @@ impl DeterministicRng {
         }
     }
 
+    #[inline(always)]
     pub fn gen_bool_ratio(&mut self, numerator: u64, denominator: u64) -> bool {
         debug_assert!(denominator > 0);
         if numerator == 0 {
@@ -94,6 +101,7 @@ impl DeterministicRng {
         (self.next_u64() % denominator) < numerator
     }
 
+    #[inline]
     pub fn gen_unit_f64(&mut self) -> f64 {
         let value = self.next_u64() >> 11;
         (value as f64) * (1.0 / 9007199254740992.0)

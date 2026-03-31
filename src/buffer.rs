@@ -54,10 +54,12 @@ pub(crate) fn default_array<T: Default, const N: usize>() -> [T; N] {
 }
 
 impl<T, const N: usize> FixedVec<T, N> {
+    #[inline(always)]
     pub fn clear(&mut self) {
         self.len = 0;
     }
 
+    #[inline(always)]
     pub const fn len(&self) -> usize {
         self.len
     }
@@ -66,14 +68,17 @@ impl<T, const N: usize> FixedVec<T, N> {
         N
     }
 
+    #[inline(always)]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    #[inline(always)]
     pub fn as_slice(&self) -> &[T] {
         &self.data[..self.len]
     }
 
+    #[inline(always)]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.data[..self.len]
     }
@@ -100,6 +105,7 @@ impl<T: Default, const N: usize> FixedVec<T, N> {
         Self::default()
     }
 
+    #[inline(always)]
     pub fn push(&mut self, item: T) -> Result<(), CapacityError> {
         if self.len == N {
             return Err(CapacityError { capacity: N });

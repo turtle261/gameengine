@@ -4,15 +4,15 @@ use crate::game::Game;
 use crate::rng::DeterministicRng;
 use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
 
-const WIN_LINES: [(usize, usize, usize); 8] = [
-    (0, 1, 2),
-    (3, 4, 5),
-    (6, 7, 8),
-    (0, 3, 6),
-    (1, 4, 7),
-    (2, 5, 8),
-    (0, 4, 8),
-    (2, 4, 6),
+const WIN_MASKS: [u16; 8] = [
+    (1 << 0) | (1 << 1) | (1 << 2),
+    (1 << 3) | (1 << 4) | (1 << 5),
+    (1 << 6) | (1 << 7) | (1 << 8),
+    (1 << 0) | (1 << 3) | (1 << 6),
+    (1 << 1) | (1 << 4) | (1 << 7),
+    (1 << 2) | (1 << 5) | (1 << 8),
+    (1 << 0) | (1 << 4) | (1 << 8),
+    (1 << 2) | (1 << 4) | (1 << 6),
 ];
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -41,26 +41,28 @@ pub struct TicTacToe;
 
 impl TicTacToe {
     fn find_winner(board: &[TicTacToeCell; 9]) -> Option<PlayerId> {
-        for (a, b, c) in WIN_LINES {
-            let cells = (board[a], board[b], board[c]);
-            if cells
-                == (
-                    TicTacToeCell::Player,
-                    TicTacToeCell::Player,
-                    TicTacToeCell::Player,
-                )
-            {
+        let mut player_bits = 0u16;
+        let mut opponent_bits = 0u16;
+        let mut index = 0usize;
+        while index < board.len() {
+            match board[index] {
+                TicTacToeCell::Player => player_bits |= 1u16 << index,
+                TicTacToeCell::Opponent => opponent_bits |= 1u16 << index,
+                TicTacToeCell::Empty => {}
+            }
+            index += 1;
+        }
+
+        let mut line = 0usize;
+        while line < WIN_MASKS.len() {
+            let mask = WIN_MASKS[line];
+            if (player_bits & mask) == mask {
                 return Some(0);
             }
-            if cells
-                == (
-                    TicTacToeCell::Opponent,
-                    TicTacToeCell::Opponent,
-                    TicTacToeCell::Opponent,
-                )
-            {
+            if (opponent_bits & mask) == mask {
                 return Some(1);
             }
+            line += 1;
         }
         None
     }

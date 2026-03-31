@@ -195,12 +195,9 @@ impl Blackjack {
 
     fn pack_cards(cards: &[u8; MAX_HAND_CARDS], len: u8) -> u64 {
         let mut packed = 0u64;
-        let limit = len as usize;
+        let limit = (len as usize).min(MAX_HAND_CARDS);
         let mut index = 0usize;
-        while index < MAX_HAND_CARDS {
-            if index >= limit {
-                break;
-            }
+        while index < limit {
             packed |= u64::from(cards[index]) << (index * 4);
             index += 1;
         }
@@ -471,8 +468,8 @@ impl CompactGame for Blackjack {
     fn compact_spec(&self) -> CompactSpec {
         CompactSpec {
             action_count: 2,
-            observation_bits: 64,
-            observation_stream_len: 4,
+            observation_bits: 48,
+            observation_stream_len: 3,
             reward_bits: 2,
             min_reward: -1,
             max_reward: 1,
@@ -530,7 +527,6 @@ impl CompactGame for Blackjack {
             observation.opponent_visible_len,
         ))
         .unwrap();
-        out.push(0).unwrap();
     }
 
     fn encode_spectator_observation(
@@ -568,7 +564,6 @@ impl CompactGame for Blackjack {
             observation.opponent_len,
         ))
         .unwrap();
-        out.push(0).unwrap();
     }
 }
 

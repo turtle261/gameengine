@@ -214,6 +214,26 @@ fn compact_interfaces_round_trip_actions_and_rewards() {
     }
 }
 
+#[test]
+fn builtin_compact_specs_are_minimal_and_stable() {
+    let _guard = lock_validation();
+
+    let tictactoe = TicTacToe.compact_spec();
+    assert_eq!(tictactoe.observation_bits, 18);
+    assert_eq!(tictactoe.observation_stream_len, 1);
+
+    let blackjack = Blackjack.compact_spec();
+    assert_eq!(blackjack.observation_bits, 48);
+    assert_eq!(blackjack.observation_stream_len, 3);
+
+    #[cfg(feature = "physics")]
+    {
+        let platformer = Platformer::default().compact_spec();
+        assert_eq!(platformer.observation_bits, 12);
+        assert_eq!(platformer.observation_stream_len, 1);
+    }
+}
+
 #[cfg(feature = "physics")]
 #[test]
 fn rollback_and_fork_restore_exact_state() {
@@ -285,7 +305,7 @@ fn golden_compact_traces_match_expected_values() {
         action: BlackjackAction::Hit,
     }]];
     let (compact, trace_hash, _) = capture_compact_trace(Blackjack, 11, &blackjack_actions);
-    assert_eq!(compact, vec![vec![140693832466, 1449, 132, 0]]);
+    assert_eq!(compact, vec![vec![140693832466, 1449, 132]]);
     assert_eq!(trace_hash, 0xd6d3_8ce4_845f_4206);
 
     #[cfg(feature = "physics")]

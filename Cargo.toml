@@ -1,12 +1,14 @@
 [package]
 name = "gameengine"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 autobins = false
 license = "ISC"
 description = " A formally verified, deterministic, reversible game/simulation kernel designed as the reference environment layer for Infotheory."
 repository = "https://github.com/turtle261/gameengine"
 homepage = "https://infotheory.tech/gameengine.html"
+
+[workspace]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
@@ -58,3 +60,10 @@ required-features = ["cli"]
 name = "step_throughput"
 harness = false
 required-features = ["builtin-games"]
+
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
