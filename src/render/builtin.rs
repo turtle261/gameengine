@@ -1,12 +1,14 @@
+//! Builtin presenters for builtin environments.
+
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::keyboard::{KeyCode, PhysicalKey};
 
-use crate::games::{
+use crate::builtin::{
     Blackjack, BlackjackAction, BlackjackObservation, BlackjackPhase, TicTacToe, TicTacToeAction,
     TicTacToeCell, TicTacToeObservation,
 };
 #[cfg(feature = "physics")]
-use crate::games::{Platformer, PlatformerAction, PlatformerConfig, PlatformerObservation};
+use crate::builtin::{Platformer, PlatformerAction, PlatformerConfig, PlatformerObservation};
 #[cfg(feature = "physics")]
 use crate::physics::PhysicsOracleView2d;
 
@@ -29,6 +31,7 @@ const DANGER: Color = Color::from_rgb8(248, 113, 113);
 const TEXT: Color = Color::from_rgb8(241, 245, 249);
 const MUTED: Color = Color::from_rgb8(148, 163, 184);
 
+/// Observation presenter for tic-tac-toe.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TicTacToePresenter {
     cursor: Point2,
@@ -224,6 +227,7 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
 
 impl ObservationPresenter<TicTacToe> for TicTacToePresenter {}
 
+/// Observation presenter for blackjack.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BlackjackPresenter {
     cursor: Point2,
@@ -393,8 +397,10 @@ impl Presenter<Blackjack> for BlackjackPresenter {
 impl ObservationPresenter<Blackjack> for BlackjackPresenter {}
 
 #[cfg(feature = "physics")]
+/// Observation presenter for platformer.
 #[derive(Clone, Copy, Debug)]
 pub struct PlatformerPresenter {
+    /// Platformer configuration used for scene scaling.
     pub config: PlatformerConfig,
     cursor: Point2,
     left_held: bool,
@@ -556,6 +562,7 @@ impl Presenter<Platformer> for PlatformerPresenter {
 impl ObservationPresenter<Platformer> for PlatformerPresenter {}
 
 #[cfg(feature = "physics")]
+/// Oracle/world presenter for platformer physics debugging.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlatformerPhysicsPresenter {
     inner: PlatformerPresenter,
@@ -563,6 +570,7 @@ pub struct PlatformerPhysicsPresenter {
 
 #[cfg(feature = "physics")]
 impl PlatformerPhysicsPresenter {
+    /// Creates a physics presenter with explicit platformer config.
     pub fn new(config: PlatformerConfig) -> Self {
         Self {
             inner: PlatformerPresenter {
@@ -793,7 +801,7 @@ mod tests {
     use super::{
         BlackjackPresenter, PlatformerPhysicsPresenter, PlatformerPresenter, TicTacToePresenter,
     };
-    use crate::games::{Blackjack, Platformer, TicTacToe};
+    use crate::builtin::{Blackjack, Platformer, TicTacToe};
     use crate::render::{
         FrameMetrics, Presenter, RealtimeDriver, RenderGameView, Scene2d, TickDriver,
         TurnBasedDriver,
@@ -846,7 +854,7 @@ mod tests {
     #[test]
     fn platformer_presenters_emit_geometry() {
         let session = Session::new(Platformer::default(), 1);
-        let driver = RealtimeDriver::new(session, crate::games::PlatformerAction::Stay);
+        let driver = RealtimeDriver::new(session, crate::builtin::PlatformerAction::Stay);
         let metrics = FrameMetrics {
             width: 1180,
             height: 620,
@@ -856,7 +864,7 @@ mod tests {
         let view = RenderGameView::from_cache(driver.session().game(), &cache);
         let mut observation_presenter = PlatformerPresenter::default();
         let mut oracle_presenter =
-            PlatformerPhysicsPresenter::new(crate::games::PlatformerConfig::default());
+            PlatformerPhysicsPresenter::new(crate::builtin::PlatformerConfig::default());
         let mut observation_scene = Scene2d::default();
         let mut oracle_scene = Scene2d::default();
         observation_presenter.populate_scene(&mut observation_scene, metrics, &view);

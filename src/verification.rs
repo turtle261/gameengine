@@ -1,9 +1,22 @@
+//! Runtime contract-check helpers for transitions, observations, and compact codecs.
+
 use crate::buffer::Buffer;
-use crate::compact::CompactGame;
 use crate::game::Game;
 use crate::rng::DeterministicRng;
-use crate::types::{Seed, StepOutcome};
+use crate::types::{Reward, Seed, StepOutcome};
 
+/// Returns true when a reward stays in range and terminal flags remain consistent.
+pub fn reward_and_terminal_postcondition(
+    reward: Reward,
+    min_reward: Reward,
+    max_reward: Reward,
+    post_terminal: bool,
+    outcome_terminal: bool,
+) -> bool {
+    (min_reward..=max_reward).contains(&reward) && (post_terminal == outcome_terminal)
+}
+
+/// Asserts deterministic transition and postcondition contracts for one step.
 pub fn assert_transition_contracts<G: Game>(
     game: &G,
     pre: &G::State,
@@ -37,6 +50,7 @@ pub fn assert_transition_contracts<G: Game>(
     assert!(game.transition_postcondition(pre, actions, &left_state, &left_outcome,));
 }
 
+/// Asserts player, spectator, and world-view observation contracts.
 pub fn assert_observation_contracts<G: Game>(game: &G, state: &G::State) {
     assert!(game.state_invariant(state));
     for player in 0..game.player_count() {
@@ -49,7 +63,8 @@ pub fn assert_observation_contracts<G: Game>(game: &G, state: &G::State) {
     assert!(game.world_view_invariant(state, &world));
 }
 
-pub fn assert_compact_roundtrip<G: CompactGame>(game: &G, action: &G::Action) {
+/// Asserts compact action encoding roundtrips through decode.
+pub fn assert_compact_roundtrip<G: Game>(game: &G, action: &G::Action) {
     let encoded = game.encode_action(action);
     assert_eq!(game.decode_action(encoded), Some(*action));
 }

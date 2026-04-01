@@ -1,4 +1,4 @@
-#![cfg(feature = "builtin-games")]
+#![cfg(feature = "builtin")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -6,12 +6,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use gameengine::buffer::Buffer;
-use gameengine::games::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
+use gameengine::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 #[cfg(feature = "physics")]
-use gameengine::games::{Platformer, PlatformerAction};
+use gameengine::builtin::{Platformer, PlatformerAction};
 use gameengine::{
-    CompactGame, CompactSpec, DeterministicRng, FixedVec, Game, PlayerAction, PlayerReward,
-    Session, StepOutcome, stable_hash,
+    CompactSpec, DeterministicRng, FixedVec, Game, InteractiveSession, PlayerAction,
+    PlayerReward, Session, StepOutcome, stable_hash,
 };
 
 struct CountingAllocator;
@@ -79,7 +79,7 @@ fn capture_compact_trace<G>(
     actions: &[Vec<PlayerAction<G::Action>>],
 ) -> (Vec<Vec<u64>>, u64, u64)
 where
-    G: Game + CompactGame + Copy,
+    G: Game + Copy,
 {
     let mut session = Session::new(game, seed);
     let mut compact_trace = Vec::new();
@@ -481,12 +481,23 @@ fn parallel_replay_matches_serial() {
                 action: TicTacToeAction(0),
             }]],
         ),
+        (
+            13,
+            (0..320)
+                .map(|_| {
+                    vec![PlayerAction {
+                        player: 0,
+                        action: TicTacToeAction(9),
+                    }]
+                })
+                .collect(),
+        ),
     ];
     let parallel = replay_many(&TicTacToe, &traces);
     let serial: Vec<_> = traces
         .iter()
         .map(|(seed, steps)| {
-            let mut session = Session::new(TicTacToe, *seed);
+            let mut session = InteractiveSession::new(TicTacToe, *seed);
             for step in steps {
                 if session.is_terminal() {
                     break;

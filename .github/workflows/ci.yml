@@ -20,7 +20,7 @@ jobs:
         run: cargo test
 
       - name: Builtin game tests
-        run: cargo test --features builtin-games
+        run: cargo test --features builtin
 
       - name: Physics tests
         run: cargo test --features physics
@@ -29,16 +29,16 @@ jobs:
         run: cargo test --features parallel
 
       - name: Builtin physics tests
-        run: cargo test --features "builtin-games physics"
+        run: cargo test --features "builtin physics"
 
       - name: Rendered builtin tests
-        run: cargo test --features "render builtin-games physics"
+        run: cargo test --features "render builtin physics"
 
       - name: Render framework check
         run: cargo check --features render
 
       - name: Rendered builtin check
-        run: cargo check --features "render builtin-games"
+        run: cargo check --features "render builtin"
 
       - name: CLI check
         run: cargo check --bin gameengine --features cli
@@ -53,13 +53,34 @@ jobs:
         run: cargo check --target wasm32-unknown-unknown --features physics
 
       - name: WASM rendered builtin check
-        run: cargo check --target wasm32-unknown-unknown --features "render builtin-games physics"
+        run: cargo check --target wasm32-unknown-unknown --features "render builtin physics"
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Rustdoc coverage gate
+        run: |
+          cargo +nightly rustdoc --all-features -- -Z unstable-options --show-coverage --output-format json > /tmp/rustdoc_cov.json
+          python - <<'PY'
+          import json, sys
+          files = json.load(open('/tmp/rustdoc_cov.json'))
+          with_docs = sum(v.get('with_docs', 0) for v in files.values())
+          total = sum(v.get('total', 0) for v in files.values())
+          pct = 100.0 if total == 0 else (with_docs * 100.0 / total)
+          print(f"Rustdoc documented items: {with_docs}/{total} ({pct:.2f}%)")
+          if with_docs != total:
+              print('Rustdoc coverage gate failed (<100.0%).', file=sys.stderr)
+              sys.exit(1)
+          PY
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Verus model checks
+        run: REQUIRE_VERUS=1 bash scripts/run-verus.sh
+
       - name: Bench compile
-        run: cargo bench --no-run --features "builtin-games physics"
+        run: cargo bench --no-run --features "builtin physics"
 
   kani:
     runs-on: ubuntu-latest
@@ -72,4 +93,4 @@ jobs:
         with:
           kani-version: "0.67.0"
           command: bash
-          args: "scripts/run-kani.sh"
+          args: "-lc 'VERIFICATION_MODE=kani-only scripts/run-verification.sh'"

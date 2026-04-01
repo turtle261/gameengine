@@ -3,7 +3,8 @@
 Use this checklist when adding a new builtin or first-party game.
 
 If the game is intended to ship as a first-party reference environment, gate it behind the
-`builtin-games` feature. Rendering stays outside the proof claim; only the pure game kernel,
+`builtin` feature. Rendering stays outside direct GPU
+proof scope; only the pure game kernel,
 world view, compact codec, and physics hooks belong in the verification checklist.
 
 ## Runtime Checklist
@@ -11,7 +12,7 @@ world view, compact codec, and physics hooks belong in the verification checklis
 - Add a deterministic smoke test from `init(seed)` through a fixed action trace.
 - Add a replay equivalence test using `Session::state_at`, `rewind_to`, and `fork_at`.
 - Add a no-allocation hot-path test for direct `step_in_place`.
-- Add compact codec round-trip tests if the game implements `CompactGame`.
+- Add compact codec round-trip tests for the game action/observation codec hooks.
 
 ## `Game` Hook Checklist
 

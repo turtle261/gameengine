@@ -1,6 +1,6 @@
 [package]
 name = "gameengine"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 autobins = false
 license = "ISC"
@@ -13,9 +13,10 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [features]
 default = []
+proof = []
 physics = []
-builtin-games = []
-cli = ["builtin-games"]
+builtin = []
+cli = ["builtin"]
 parallel = ["dep:rayon"]
 render = [
     "dep:bytemuck",
@@ -51,10 +52,15 @@ criterion = { version = "0.5.1", default-features = false, features = ["cargo_be
 
 [[bin]]
 name = "gameengine"
-path = "src/main.rs"
+path = "src/bin/gameengine.rs"
 required-features = ["cli"]
 
 [[bench]]
 name = "step_throughput"
 harness = false
-required-features = ["builtin-games"]
+required-features = ["builtin"]
+
+[[bench]]
+name = "kernel_hotpaths"
+harness = false
+required-features = ["builtin"]

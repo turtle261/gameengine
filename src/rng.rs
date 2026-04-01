@@ -1,18 +1,23 @@
+//! Deterministic RNG primitives used across simulation and policy execution.
+
 use crate::types::Seed;
 
 const ZERO_STATE_REPLACEMENT: u64 = 0xCAFEBABEDEADBEEF;
 const STREAM_XOR: u64 = 0x9E3779B97F4A7C15;
 
+/// SplitMix64 mixer used to derive per-stream RNG states.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SplitMix64 {
     state: u64,
 }
 
 impl SplitMix64 {
+    /// Creates a mixer from `seed`.
     pub const fn new(seed: Seed) -> Self {
         Self { state: seed }
     }
 
+    /// Advances the mixer and returns one 64-bit value.
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(STREAM_XOR);
         let mut z = self.state;
@@ -22,6 +27,7 @@ impl SplitMix64 {
     }
 }
 
+/// Deterministic xorshift-style RNG with stable stream forking.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct DeterministicRng {
     root_seed: Seed,
@@ -35,10 +41,12 @@ impl Default for DeterministicRng {
 }
 
 impl DeterministicRng {
+    /// Creates an RNG from a root seed using stream id `0`.
     pub fn from_seed(seed: Seed) -> Self {
         Self::from_seed_and_stream(seed, 0)
     }
 
+    /// Creates an RNG from `seed` and stable `stream_id`.
     pub fn from_seed_and_stream(seed: Seed, stream_id: u64) -> Self {
         let mut mixer = SplitMix64::new(seed ^ stream_id.wrapping_mul(STREAM_XOR));
         let state = sanitize_state(mixer.next_u64());
@@ -48,18 +56,22 @@ impl DeterministicRng {
         }
     }
 
+    /// Returns the root seed used to derive this RNG stream.
     pub const fn root_seed(self) -> Seed {
         self.root_seed
     }
 
+    /// Returns internal RNG state for reproducibility/testing.
     pub const fn raw_state(self) -> u64 {
         self.state
     }
 
+    /// Derives a sibling stream from the same root seed.
     pub fn fork(&self, stream_id: u64) -> Self {
         Self::from_seed_and_stream(self.root_seed, stream_id)
     }
 
+    /// Generates the next 64-bit random value.
     pub fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x >> 12;
@@ -69,6 +81,7 @@ impl DeterministicRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
 
+    /// Samples uniformly in `[0, end)`.
     pub fn gen_range(&mut self, end: usize) -> usize {
         if end <= 1 {
             return 0;
@@ -83,6 +96,7 @@ impl DeterministicRng {
         }
     }
 
+    /// Samples a Bernoulli outcome with probability `numerator / denominator`.
     pub fn gen_bool_ratio(&mut self, numerator: u64, denominator: u64) -> bool {
         debug_assert!(denominator > 0);
         if numerator == 0 {
@@ -94,11 +108,13 @@ impl DeterministicRng {
         (self.next_u64() % denominator) < numerator
     }
 
+    /// Samples a floating-point number in `[0, 1)`.
     pub fn gen_unit_f64(&mut self) -> f64 {
         let value = self.next_u64() >> 11;
         (value as f64) * (1.0 / 9007199254740992.0)
     }
 
+    /// In-place Fisher-Yates shuffle using deterministic randomness.
     pub fn shuffle<T>(&mut self, slice: &mut [T]) {
         for index in (1..slice.len()).rev() {
             let swap_index = self.gen_range(index + 1);

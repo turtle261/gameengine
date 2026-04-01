@@ -1,5 +1,8 @@
+//! Wall-clock to simulation-tick pacing helper.
+
 use std::time::Instant;
 
+/// Converts wall-clock frame deltas into bounded simulation tick counts.
 #[derive(Clone, Debug)]
 pub struct TickPacer {
     tick_period_seconds: f64,

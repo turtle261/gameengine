@@ -1,9 +1,9 @@
-#![cfg(feature = "builtin-games")]
+#![cfg(feature = "builtin")]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use gameengine::games::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
+use gameengine::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 #[cfg(feature = "physics")]
-use gameengine::games::{Platformer, PlatformerAction};
+use gameengine::builtin::{Platformer, PlatformerAction};
 use gameengine::{PlayerAction, Session};
 
 fn bench_tictactoe(c: &mut Criterion) {

@@ -1,4 +1,7 @@
+//! Session kernel, history stores, and replay/rewind utilities.
+
 use core::fmt::Debug;
+use std::collections::VecDeque;
 
 use crate::buffer::{Buffer, default_array};
 use crate::game::Game;
@@ -6,18 +9,27 @@ use crate::policy::Policy;
 use crate::rng::DeterministicRng;
 use crate::types::{DynamicReplayTrace, PlayerAction, ReplayTrace, Seed, StepOutcome, Tick};
 
+/// Saved checkpoint used by history implementations for rewind.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct HistorySnapshot<S> {
+    /// Tick represented by this snapshot.
     pub tick: Tick,
+    /// Cloned game state.
     pub state: S,
+    /// RNG state associated with `state`.
     pub rng: DeterministicRng,
 }
 
+/// Storage backend for session traces and rewind snapshots.
 pub trait HistoryStore<G: Game>: Clone {
+    /// Trace representation emitted by this history backend.
     type Trace: Clone + Debug + Eq + PartialEq;
 
+    /// Creates a history store from initial session state.
     fn from_seed(seed: Seed, initial_state: &G::State, initial_rng: DeterministicRng) -> Self;
+    /// Resets history to initial session state.
     fn reset(&mut self, seed: Seed, initial_state: &G::State, initial_rng: DeterministicRng);
+    /// Records one transition and optional snapshot.
     fn record(
         &mut self,
         tick: Tick,
@@ -26,20 +38,26 @@ pub trait HistoryStore<G: Game>: Clone {
         actions: &G::JointActionBuf,
         outcome: &StepOutcome<G::RewardBuf>,
     );
+    /// Returns recorded transition count.
     fn len(&self) -> usize;
+    /// Returns whether no transitions are recorded.
     fn is_empty(&self) -> bool;
+    /// Returns immutable trace view.
     fn trace(&self) -> &Self::Trace;
+    /// Consumes history and returns owned trace.
     fn into_trace(self) -> Self::Trace;
+    /// Restores state/RNG at `target_tick` when available.
     fn restore(&self, game: &G, target_tick: Tick) -> Option<(G::State, DeterministicRng)>;
 }
 
+/// Dynamically-sized history with bounded checkpoint deque.
 #[derive(Debug, Eq, PartialEq)]
 pub struct DynamicHistory<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> {
     seed: Seed,
     initial_state: G::State,
     initial_rng: DeterministicRng,
     trace: DynamicReplayTrace<G::JointActionBuf, G::RewardBuf>,
-    snapshots: Vec<HistorySnapshot<G::State>>,
+    snapshots: VecDeque<HistorySnapshot<G::State>>,
 }
 
 impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> Clone
@@ -67,9 +85,9 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize>
             return;
         }
         if self.snapshots.len() == SNAPSHOTS {
-            self.snapshots.remove(0);
+            let _ = self.snapshots.pop_front();
         }
-        self.snapshots.push(HistorySnapshot {
+        self.snapshots.push_back(HistorySnapshot {
             tick,
             state: state.clone(),
             rng,
@@ -90,9 +108,9 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
     type Trace = DynamicReplayTrace<G::JointActionBuf, G::RewardBuf>;
 
     fn from_seed(seed: Seed, initial_state: &G::State, initial_rng: DeterministicRng) -> Self {
-        let mut snapshots = Vec::with_capacity(SNAPSHOTS);
+        let mut snapshots = VecDeque::with_capacity(SNAPSHOTS);
         if SNAPSHOTS > 0 {
-            snapshots.push(HistorySnapshot {
+            snapshots.push_back(HistorySnapshot {
                 tick: 0,
                 state: initial_state.clone(),
                 rng: initial_rng,
@@ -114,7 +132,7 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
         self.trace.clear(seed);
         self.snapshots.clear();
         if SNAPSHOTS > 0 {
-            self.snapshots.push(HistorySnapshot {
+            self.snapshots.push_back(HistorySnapshot {
                 tick: 0,
                 state: initial_state.clone(),
                 rng: initial_rng,
@@ -179,6 +197,7 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
     }
 }
 
+/// Fixed-capacity history with ring-buffer checkpoints.
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct FixedHistory<G: Game, const LOG: usize, const SNAPSHOTS: usize, const SNAP_EVERY: usize>
 where
@@ -333,6 +352,7 @@ where
     }
 }
 
+/// Deterministic session kernel for stepping, tracing, and rewinding games.
 #[derive(Clone, Debug)]
 pub struct SessionKernel<G: Game, H: HistoryStore<G>> {
     game: G,
@@ -346,10 +366,13 @@ pub struct SessionKernel<G: Game, H: HistoryStore<G>> {
     outcome: StepOutcome<G::RewardBuf>,
 }
 
+/// Default fixed-history session alias.
 pub type Session<G> = SessionKernel<G, FixedHistory<G, 256, 32, 8>>;
+/// Interactive dynamic-history session alias.
 pub type InteractiveSession<G> = SessionKernel<G, DynamicHistory<G, 128, 8>>;
 
 impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
+    /// Creates a new session initialized from `seed`.
     pub fn new(game: G, seed: Seed) -> Self {
         let state = game.init(seed);
         assert!(game.state_invariant(&state));
@@ -368,6 +391,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         }
     }
 
+    /// Resets session state and history to `seed`.
     pub fn reset(&mut self, seed: Seed) {
         self.state = self.game.init(seed);
         self.rng = DeterministicRng::from_seed_and_stream(seed, 1);
@@ -379,80 +403,235 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         self.outcome.clear();
     }
 
+    /// Returns the game instance.
     pub fn game(&self) -> &G {
         &self.game
     }
 
+    /// Returns current game state.
     pub fn state(&self) -> &G::State {
         &self.state
     }
 
+    /// Returns current tick.
     pub fn current_tick(&self) -> Tick {
         self.tick
     }
 
+    /// Returns current RNG snapshot.
     pub fn rng(&self) -> DeterministicRng {
         self.rng
     }
 
+    /// Returns immutable trace view.
     pub fn trace(&self) -> &H::Trace {
         self.history.trace()
     }
 
+    /// Consumes session and returns owned trace.
     pub fn into_trace(self) -> H::Trace {
         self.history.into_trace()
     }
 
+    /// Returns whether current state is terminal.
     pub fn is_terminal(&self) -> bool {
         self.game.is_terminal(&self.state)
     }
 
+    /// Returns player-local observation.
     pub fn player_observation(&self, player: usize) -> G::PlayerObservation {
         self.game.observe_player(&self.state, player)
     }
 
+    /// Returns spectator observation.
     pub fn spectator_observation(&self) -> G::SpectatorObservation {
         self.game.observe_spectator(&self.state)
     }
 
+    /// Returns world/debug view.
     pub fn world_view(&self) -> G::WorldView {
         self.game.world_view(&self.state)
     }
 
+    /// Returns legal actions for `player` in current state.
     pub fn legal_actions_for(&mut self, player: usize) -> &[G::Action] {
         self.game
             .legal_actions(&self.state, player, &mut self.legal_actions);
         self.legal_actions.as_slice()
     }
 
+    #[inline(always)]
+    fn step_core(&mut self, actions: &G::JointActionBuf) {
+        assert!(
+            !self.game.is_terminal(&self.state),
+            "cannot step a terminal session",
+        );
+        self.outcome.clear();
+        self.game
+            .step_in_place(&mut self.state, actions, &mut self.rng, &mut self.outcome);
+        self.tick += 1;
+        self.outcome.tick = self.tick;
+    }
+
+    #[inline(always)]
+    fn record_step(&mut self, actions: &G::JointActionBuf) {
+        self.history
+            .record(self.tick, &self.state, self.rng, actions, &self.outcome);
+    }
+
+    fn collect_policy_actions(
+        &mut self,
+        policies: &mut [&mut dyn Policy<G>],
+    ) {
+        self.players_to_act.clear();
+        self.game
+            .players_to_act(&self.state, &mut self.players_to_act);
+
+        self.joint_actions.clear();
+        for &player in self.players_to_act.as_slice() {
+            self.game
+                .legal_actions(&self.state, player, &mut self.legal_actions);
+            let observation = self.game.observe_player(&self.state, player);
+            let policy = policies
+                .get_mut(player)
+                .expect("missing policy for active player");
+            let action = policy.choose_action(
+                &self.game,
+                &self.state,
+                player,
+                &observation,
+                self.legal_actions.as_slice(),
+                &mut self.rng,
+            );
+            self.joint_actions
+                .push(PlayerAction { player, action })
+                .expect("joint action buffer capacity exceeded");
+        }
+    }
+
+    #[inline(always)]
+    fn step_staged_joint_actions(&mut self) -> &StepOutcome<G::RewardBuf> {
+        assert!(
+            !self.game.is_terminal(&self.state),
+            "cannot step a terminal session",
+        );
+        self.outcome.clear();
+        self.game.step_in_place(
+            &mut self.state,
+            &self.joint_actions,
+            &mut self.rng,
+            &mut self.outcome,
+        );
+        self.tick += 1;
+        self.outcome.tick = self.tick;
+        self.history.record(
+            self.tick,
+            &self.state,
+            self.rng,
+            &self.joint_actions,
+            &self.outcome,
+        );
+        &self.outcome
+    }
+
+    #[inline(always)]
+    fn step_staged_joint_actions_checked(&mut self) -> &StepOutcome<G::RewardBuf> {
+        assert!(
+            !self.game.is_terminal(&self.state),
+            "cannot step a terminal session",
+        );
+        assert!(self.game.state_invariant(&self.state));
+        for action in self.joint_actions.as_slice() {
+            assert!(self.game.action_invariant(&action.action));
+        }
+
+        let pre_state = self.state.clone();
+        self.outcome.clear();
+        self.game.step_in_place(
+            &mut self.state,
+            &self.joint_actions,
+            &mut self.rng,
+            &mut self.outcome,
+        );
+        self.tick += 1;
+        self.outcome.tick = self.tick;
+
+        assert!(self.game.state_invariant(&self.state));
+        let spectator = self.game.observe_spectator(&self.state);
+        assert!(
+            self.game
+                .spectator_observation_invariant(&self.state, &spectator)
+        );
+        let world = self.game.world_view(&self.state);
+        assert!(self.game.world_view_invariant(&self.state, &world));
+        for player in 0..self.game.player_count() {
+            let observation = self.game.observe_player(&self.state, player);
+            assert!(
+                self.game
+                    .player_observation_invariant(&self.state, player, &observation)
+            );
+        }
+        assert!(self.game.transition_postcondition(
+            &pre_state,
+            &self.joint_actions,
+            &self.state,
+            &self.outcome
+        ));
+
+        self.history.record(
+            self.tick,
+            &self.state,
+            self.rng,
+            &self.joint_actions,
+            &self.outcome,
+        );
+        &self.outcome
+    }
+
+    /// Steps using externally supplied action slice.
     pub fn step(&mut self, actions: &[PlayerAction<G::Action>]) -> &StepOutcome<G::RewardBuf> {
         self.joint_actions.clear();
         self.joint_actions
             .extend_from_slice(actions)
             .expect("joint action buffer capacity exceeded");
-        let joint_actions = self.joint_actions.clone();
-        self.step_with_joint_actions(&joint_actions)
+        self.step_staged_joint_actions()
     }
 
+    /// Steps using externally supplied action slice with contract checks.
+    pub fn step_checked(
+        &mut self,
+        actions: &[PlayerAction<G::Action>],
+    ) -> &StepOutcome<G::RewardBuf> {
+        self.joint_actions.clear();
+        self.joint_actions
+            .extend_from_slice(actions)
+            .expect("joint action buffer capacity exceeded");
+        self.step_staged_joint_actions_checked()
+    }
+
+    /// Steps with prebuilt joint-action buffer.
+    #[inline(always)]
     pub fn step_with_joint_actions(
         &mut self,
         actions: &G::JointActionBuf,
     ) -> &StepOutcome<G::RewardBuf> {
-        assert!(
-            !self.game.is_terminal(&self.state),
-            "cannot step a terminal session",
-        );
+        self.step_core(actions);
+        self.record_step(actions);
+        &self.outcome
+    }
+
+    /// Steps with contract checks enabled.
+    pub fn step_with_joint_actions_checked(
+        &mut self,
+        actions: &G::JointActionBuf,
+    ) -> &StepOutcome<G::RewardBuf> {
         assert!(self.game.state_invariant(&self.state));
         for action in actions.as_slice() {
             assert!(self.game.action_invariant(&action.action));
         }
 
         let pre_state = self.state.clone();
-        self.outcome.clear();
-        self.game
-            .step_in_place(&mut self.state, actions, &mut self.rng, &mut self.outcome);
-        self.tick += 1;
-        self.outcome.tick = self.tick;
+        self.step_core(actions);
 
         assert!(self.game.state_invariant(&self.state));
         let spectator = self.game.observe_spectator(&self.state);
@@ -476,44 +655,29 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             &self.outcome
         ));
 
-        self.history
-            .record(self.tick, &self.state, self.rng, actions, &self.outcome);
+        self.record_step(actions);
         &self.outcome
     }
 
+    /// Collects actions from policies and steps once.
     pub fn step_with_policies(
         &mut self,
         policies: &mut [&mut dyn Policy<G>],
     ) -> &StepOutcome<G::RewardBuf> {
-        self.players_to_act.clear();
-        self.game
-            .players_to_act(&self.state, &mut self.players_to_act);
-        self.joint_actions.clear();
-
-        for &player in self.players_to_act.as_slice() {
-            self.game
-                .legal_actions(&self.state, player, &mut self.legal_actions);
-            let observation = self.game.observe_player(&self.state, player);
-            let policy = policies
-                .get_mut(player)
-                .expect("missing policy for active player");
-            let action = policy.choose_action(
-                &self.game,
-                &self.state,
-                player,
-                &observation,
-                self.legal_actions.as_slice(),
-                &mut self.rng,
-            );
-            self.joint_actions
-                .push(PlayerAction { player, action })
-                .expect("joint action buffer capacity exceeded");
-        }
-
-        let actions = self.joint_actions.clone();
-        self.step_with_joint_actions(&actions)
+        self.collect_policy_actions(policies);
+        self.step_staged_joint_actions()
     }
 
+    /// Collects actions from policies and steps once with checks.
+    pub fn step_with_policies_checked(
+        &mut self,
+        policies: &mut [&mut dyn Policy<G>],
+    ) -> &StepOutcome<G::RewardBuf> {
+        self.collect_policy_actions(policies);
+        self.step_staged_joint_actions_checked()
+    }
+
+    /// Runs until terminal state or `max_ticks` is reached.
     pub fn run_until_terminal(
         &mut self,
         policies: &mut [&mut dyn Policy<G>],
@@ -525,6 +689,19 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         self.trace()
     }
 
+    /// Runs checked stepping until terminal state or `max_ticks`.
+    pub fn run_until_terminal_checked(
+        &mut self,
+        policies: &mut [&mut dyn Policy<G>],
+        max_ticks: usize,
+    ) -> &H::Trace {
+        while !self.is_terminal() && (self.tick as usize) < max_ticks {
+            self.step_with_policies_checked(policies);
+        }
+        self.trace()
+    }
+
+    /// Rewinds session state to `target_tick` when restorable.
     pub fn rewind_to(&mut self, target_tick: Tick) -> bool {
         let Some((state, rng)) = self.history.restore(&self.game, target_tick) else {
             return false;
@@ -536,16 +713,19 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         true
     }
 
+    /// Alias of `rewind_to` for replay-oriented call sites.
     pub fn replay_to(&mut self, target_tick: Tick) -> bool {
         self.rewind_to(target_tick)
     }
 
+    /// Returns reconstructed state at `target_tick`.
     pub fn state_at(&self, target_tick: Tick) -> Option<G::State> {
         self.history
             .restore(&self.game, target_tick)
             .map(|(state, _)| state)
     }
 
+    /// Returns a cloned session fork rewound to `target_tick`.
     pub fn fork_at(&self, target_tick: Tick) -> Option<Self>
     where
         G: Clone,

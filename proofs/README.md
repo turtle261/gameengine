@@ -9,14 +9,20 @@ This crate treats Kani as part of the engine, not an afterthought.
 ## Local Commands
 
 ```bash
-bash scripts/run-kani.sh
+bash scripts/run-verification.sh
 ```
 
-The script runs the proof surface harness-by-harness across three verified layers:
+Run Verus model checks directly:
+
+```bash
+bash scripts/run-verus.sh
+```
+
+The unified script runs tests, checks, clippy, bench compilation, Kani harnesses, and Verus model checks across three verified layers:
 
 - the default headless kernel,
-- the `builtin-games` reference environments,
-- the `builtin-games + physics` platformer/physics surface.
+- the `builtin` reference environments,
+- the `builtin + physics` platformer/physics surface.
 
 This keeps failures isolated and avoids monolithic proof runs that are harder to diagnose.
 
@@ -26,16 +32,18 @@ exploring an unbounded rejection loop.
 
 ## What Is Verified
 
-- Fixed-capacity buffer behavior in [`src/buffer.rs`](/home/theo/dev/gameengine/src/buffer.rs)
-- Reward and replay encoding primitives in [`src/types.rs`](/home/theo/dev/gameengine/src/types.rs)
-- Compact reward codec soundness in [`src/compact.rs`](/home/theo/dev/gameengine/src/compact.rs)
-- PRNG replay/fork determinism in [`src/rng.rs`](/home/theo/dev/gameengine/src/rng.rs)
-- Rollback and replay restoration in [`src/session.rs`](/home/theo/dev/gameengine/src/session.rs)
-- Game-specific properties in the builtin game modules when `builtin-games` is enabled
+See [`proofs/claim.md`](claim.md) for a precise verified vs tested vs out-of-scope matrix.
+
+- Fixed-capacity buffer behavior in [`src/buffer.rs`](../src/buffer.rs)
+- Reward and replay encoding primitives in [`src/types.rs`](../src/types.rs)
+- Compact reward codec soundness in [`src/compact.rs`](../src/compact.rs)
+- PRNG replay/fork determinism in [`src/rng.rs`](../src/rng.rs)
+- Rollback and replay restoration in [`src/session.rs`](../src/session.rs)
+- Game-specific properties in the builtin game modules when `builtin` is enabled
 - Physics invariants for the engine-owned 2D world and the platformer environment when
-  `builtin-games` and `physics` are enabled
-- The render stack is intentionally outside the proof claim; it consumes verified game state but
-  does not participate in the Kani surface
+  `builtin` and `physics` are enabled
+- Render-input safety claims now include observation decoding and scene-order normalization checks;
+  final GPU backend execution remains outside full formal proof scope
 
 ## Verification Pattern For New Games
 
@@ -48,11 +56,11 @@ exploring an unbounded rejection loop.
    - `transition_postcondition`
 2. Add runtime tests for determinism, replay, compact codecs, and rollback if the game uses sessions.
 3. Add `#[cfg(kani)]` proof harnesses in the game module.
-4. Call the shared helpers in [`src/verification.rs`](/home/theo/dev/gameengine/src/verification.rs) for transition and observation contracts.
+4. Call the shared helpers in [`src/verification.rs`](../src/verification.rs) for transition and observation contracts.
 5. If the game exposes a compact codec, prove action round-trips and reward range correctness.
 6. If the game uses the `physics` feature, prove the world invariant before and after every step.
-7. If the game is a first-party reference environment, gate it behind `builtin-games` and add its
-   harnesses to [`scripts/run-kani.sh`](/home/theo/dev/gameengine/scripts/run-kani.sh).
+7. If the game is a first-party reference environment, gate it behind `builtin` and add its
+  harnesses to [`scripts/run-verification.sh`](../scripts/run-verification.sh).
 
 ## Acceptance Rule
 
@@ -60,7 +68,7 @@ A new first-party game is only "verified" when:
 
 - the runtime test suite passes,
 - the Kani harnesses pass in the default feature set,
-- the Kani harnesses pass in `--features builtin-games` if it is a builtin reference game,
-- the Kani harnesses pass in `--features "builtin-games physics"` if the game uses the physics subsystem,
+- the Kani harnesses pass in `--features builtin` if it is a builtin reference game,
+- the Kani harnesses pass in `--features "builtin physics"` if the game uses the physics subsystem,
 - rollback/fork determinism is covered,
 - compact encoding is covered when applicable.

@@ -1,8 +1,10 @@
+//! Rendering subsystem exposing scene commands, presenters, and runtime loop.
+
 mod pacer;
 mod runtime;
 mod scene;
 
-#[cfg(feature = "builtin-games")]
+#[cfg(feature = "builtin")]
 pub mod builtin;
 
 pub use pacer::TickPacer;

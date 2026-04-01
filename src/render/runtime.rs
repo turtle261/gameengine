@@ -1,3 +1,5 @@
+//! Runtime renderer abstractions, drivers, and native window integration.
+
 use std::fmt;
 #[cfg(not(target_arch = "wasm32"))]
 use std::mem;
@@ -71,20 +73,31 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Presentation mode used by render presenters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RenderMode {
+    /// Player-observation-oriented presentation.
     Observation,
+    /// Full oracle/world-view presentation.
     OracleWorld,
 }
 
+/// Renderer timing and window configuration.
 #[derive(Clone, Copy, Debug)]
 pub struct RenderConfig {
+    /// Target simulation tick rate.
     pub tick_rate_hz: f64,
+    /// Maximum simulation ticks processed per frame.
     pub max_catch_up_ticks: usize,
+    /// Enables display vsync when true.
     pub vsync: bool,
+    /// Enables debug overlay panel.
     pub show_debug_overlay: bool,
+    /// Presenter mode selector.
     pub mode: RenderMode,
+    /// Initial window width in pixels.
     pub window_width: u32,
+    /// Initial window height in pixels.
     pub window_height: u32,
 }
 
@@ -102,39 +115,58 @@ impl Default for RenderConfig {
     }
 }
 
+/// Per-frame viewport metrics supplied to presenters.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameMetrics {
+    /// Drawable width in pixels.
     pub width: u32,
+    /// Drawable height in pixels.
     pub height: u32,
+    /// Platform scale factor.
     pub scale_factor: f64,
 }
 
+/// Action stream command consumed by runtime drivers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActionCommand<A> {
+    /// Submit a one-shot action for the next tick.
     Pulse(A),
+    /// Set a continuous action held across ticks.
     SetContinuous(A),
+    /// Clear the current continuous action.
     ClearContinuous,
 }
 
+/// Sink for presenter-generated input commands.
 pub trait ActionSink<G: Game> {
+    /// Submits an input command to the driver.
     fn submit_command(&mut self, command: ActionCommand<G::Action>);
 }
 
+/// Simulation driver interface consumed by the renderer.
 pub trait TickDriver<G: Game> {
+    /// History backend used by the underlying session.
     type History: HistoryStore<G>;
 
+    /// Returns immutable access to the current session.
     fn session(&self) -> &SessionKernel<G, Self::History>;
+    /// Returns most recent transition outcome, if any.
     fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>>;
+    /// Advances simulation by up to `due_ticks`.
     fn advance_ticks(&mut self, due_ticks: usize);
 }
 
+/// Presenter contract for translating game state into scene commands.
 pub trait Presenter<G: Game> {
+    /// Returns window title text.
     fn title(&self, game: &G) -> String;
 
+    /// Preferred initial window size.
     fn preferred_window_size(&self) -> (u32, u32) {
         (960, 640)
     }
 
+    /// Handles one window/input event.
     fn on_window_event(
         &mut self,
         event: &WindowEvent,
@@ -143,6 +175,7 @@ pub trait Presenter<G: Game> {
         actions: &mut dyn ActionSink<G>,
     );
 
+    /// Populates scene commands for the current frame.
     fn populate_scene(
         &mut self,
         scene: &mut Scene2d,
@@ -151,8 +184,10 @@ pub trait Presenter<G: Game> {
     );
 }
 
+/// Marker trait for observation-mode presenters.
 pub trait ObservationPresenter<G: Game>: Presenter<G> {}
 
+/// Marker trait for oracle/world-mode presenters.
 pub trait OraclePresenter<G: Game>: Presenter<G> {}
 
 #[derive(Debug)]
@@ -197,6 +232,7 @@ impl<G: Game> ViewCache<G> {
     }
 }
 
+/// Read-only frame view combining game descriptor and cached session-derived data.
 pub struct RenderGameView<'a, G: Game> {
     game: &'a G,
     cache: &'a ViewCache<G>,
@@ -207,43 +243,53 @@ impl<'a, G: Game> RenderGameView<'a, G> {
         Self { game, cache }
     }
 
+    /// Returns game descriptor.
     pub fn game(&self) -> &'a G {
         self.game
     }
 
+    /// Returns current simulation tick.
     pub fn tick(&self) -> Tick {
         self.cache.tick
     }
 
+    /// Returns player-local observation.
     pub fn player_observation(&self) -> &G::PlayerObservation {
         &self.cache.player_observation
     }
 
+    /// Returns spectator observation.
     pub fn spectator_observation(&self) -> &G::SpectatorObservation {
         &self.cache.spectator_observation
     }
 
+    /// Returns world/oracle view.
     pub fn world_view(&self) -> &G::WorldView {
         &self.cache.world_view
     }
 
+    /// Returns previous world view when interpolation is active.
     pub fn previous_world_view(&self) -> Option<&G::WorldView> {
         self.cache.previous_world_view.as_ref()
     }
 
+    /// Returns most recent transition outcome.
     pub fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>> {
         self.cache.last_outcome.as_ref()
     }
 
+    /// Returns reward for `player` in the most recent outcome.
     pub fn reward_for(&self, player: usize) -> Reward {
         self.last_outcome()
             .map_or(0, |outcome| outcome.reward_for(player))
     }
 
+    /// Returns whether current state is terminal.
     pub fn is_terminal(&self) -> bool {
         self.cache.is_terminal
     }
 
+    /// Returns interpolation alpha in `[0, 1]`.
     pub fn interpolation_alpha(&self) -> f32 {
         self.cache.interpolation_alpha
     }
@@ -295,6 +341,7 @@ where
     scene
 }
 
+/// Driver that advances only when explicit actions are provided.
 #[derive(Debug)]
 pub struct TurnBasedDriver<G: Game, H: HistoryStore<G>> {
     session: SessionKernel<G, H>,
@@ -303,6 +350,7 @@ pub struct TurnBasedDriver<G: Game, H: HistoryStore<G>> {
 }
 
 impl<G: Game, H: HistoryStore<G>> TurnBasedDriver<G, H> {
+    /// Creates a turn-based driver from a session.
     pub fn new(session: SessionKernel<G, H>) -> Self {
         Self {
             session,
@@ -348,6 +396,7 @@ impl<G: Game, H: HistoryStore<G>> TickDriver<G> for TurnBasedDriver<G, H> {
     }
 }
 
+/// Driver for realtime input with neutral and continuous actions.
 #[derive(Debug)]
 pub struct RealtimeDriver<G: Game, H: HistoryStore<G>> {
     session: SessionKernel<G, H>,
@@ -358,6 +407,7 @@ pub struct RealtimeDriver<G: Game, H: HistoryStore<G>> {
 }
 
 impl<G: Game, H: HistoryStore<G>> RealtimeDriver<G, H> {
+    /// Creates a realtime driver with a neutral fallback action.
     pub fn new(session: SessionKernel<G, H>, neutral_action: G::Action) -> Self {
         Self {
             session,
@@ -412,6 +462,7 @@ impl<G: Game, H: HistoryStore<G>> TickDriver<G> for RealtimeDriver<G, H> {
     }
 }
 
+/// Driver that advances using an internal policy, ignoring user input.
 #[derive(Debug)]
 pub struct PassivePolicyDriver<G: Game, H: HistoryStore<G>, P: Policy<G>> {
     session: SessionKernel<G, H>,
@@ -420,6 +471,7 @@ pub struct PassivePolicyDriver<G: Game, H: HistoryStore<G>, P: Policy<G>> {
 }
 
 impl<G: Game, H: HistoryStore<G>, P: Policy<G>> PassivePolicyDriver<G, H, P> {
+    /// Creates a passive-policy driver.
     pub fn new(session: SessionKernel<G, H>, policy: P) -> Self {
         Self {
             session,
@@ -455,6 +507,7 @@ impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G> for PassivePolicyD
     }
 }
 
+/// Error returned by native renderer setup or frame execution.
 #[derive(Debug)]
 pub struct RenderError {
     message: String,
@@ -476,6 +529,7 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
+/// Top-level renderer application wrapper.
 pub struct RendererApp<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> {
     config: RenderConfig,
     driver: D,
@@ -484,6 +538,7 @@ pub struct RendererApp<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G
 }
 
 impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> RendererApp<G, D, P> {
+    /// Creates a renderer application from config, driver, and presenter.
     pub fn new(config: RenderConfig, driver: D, presenter: P) -> Self {
         Self {
             config,
@@ -498,6 +553,7 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> RendererApp<G, 
 impl<G: Game + 'static, D: TickDriver<G> + ActionSink<G> + 'static, P: Presenter<G> + 'static>
     RendererApp<G, D, P>
 {
+    /// Runs the native window event loop.
     pub fn run_native(self) -> Result<(), RenderError> {
         let event_loop = EventLoop::new().map_err(|error| RenderError::new(error.to_string()))?;
         let mut app = NativeApp::new(self.config, self.driver, self.presenter);
@@ -509,6 +565,7 @@ impl<G: Game + 'static, D: TickDriver<G> + ActionSink<G> + 'static, P: Presenter
 
 #[cfg(target_arch = "wasm32")]
 impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> RendererApp<G, D, P> {
+    /// Returns an error because native window rendering is unavailable on `wasm32`.
     pub fn run_native(self) -> Result<(), RenderError> {
         let RendererApp {
             config,
@@ -620,6 +677,19 @@ struct WindowState<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct QueuedActions<A> {
+    commands: Vec<ActionCommand<A>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<G: Game> ActionSink<G> for QueuedActions<G::Action> {
+    fn submit_command(&mut self, command: ActionCommand<G::Action>) {
+        self.commands.push(command);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> WindowState<G, D, P> {
     async fn new(
         window: Arc<Window>,
@@ -661,28 +731,33 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> WindowState<G, 
     }
 
     fn refresh_cache(&mut self, preserve_previous_world: bool) {
-        if preserve_previous_world {
-            self.cache.previous_world_view = Some(self.cache.world_view.clone());
-        }
         let session = self.driver.session();
         self.cache.tick = session.current_tick();
         self.cache.player_observation = session.player_observation(0);
         self.cache.spectator_observation = session.spectator_observation();
-        self.cache.world_view = session.world_view();
+        let next_world = session.world_view();
+        if preserve_previous_world {
+            let previous_world = core::mem::replace(&mut self.cache.world_view, next_world);
+            self.cache.previous_world_view = Some(previous_world);
+        } else {
+            self.cache.previous_world_view = None;
+            self.cache.world_view = next_world;
+        }
         self.cache.last_outcome = self.driver.last_outcome().cloned();
         self.cache.is_terminal = session.is_terminal();
     }
 
     fn handle_window_event(&mut self, event: &WindowEvent) {
         let metrics = self.metrics();
-        let snapshot = self.cache.clone();
-        let game_ptr = self.driver.session().game() as *const G;
-        // SAFETY:
-        // `Session` stores the immutable game definition for the lifetime of the driver. The
-        // mutable borrow below only updates controller state, not the game definition itself.
-        let view = unsafe { RenderGameView::from_cache(&*game_ptr, &snapshot) };
-        self.presenter
-            .on_window_event(event, metrics, &view, &mut self.driver);
+        let mut queued = QueuedActions::<G::Action>::default();
+        {
+            let view = RenderGameView::from_cache(self.driver.session().game(), &self.cache);
+            self.presenter
+                .on_window_event(event, metrics, &view, &mut queued);
+        }
+        for command in queued.commands {
+            self.driver.submit_command(command);
+        }
         self.request_redraw();
     }
 
@@ -699,11 +774,7 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> WindowState<G, 
 
         self.scene.clear();
         let metrics = self.metrics();
-        let snapshot = self.cache.clone();
-        let game_ptr = self.driver.session().game() as *const G;
-        // SAFETY:
-        // The presenter only reads the immutable game definition through the view.
-        let view = unsafe { RenderGameView::from_cache(&*game_ptr, &snapshot) };
+        let view = RenderGameView::from_cache(self.driver.session().game(), &self.cache);
         self.presenter
             .populate_scene(&mut self.scene, metrics, &view);
         if self.config.show_debug_overlay {
@@ -762,6 +833,8 @@ struct GpuState {
     atlas: TextAtlas,
     text_renderer: TextRenderer,
     text_buffers: Vec<GlyphBuffer>,
+    text_order: Vec<usize>,
+    geometry_order: Vec<GeometryOrderEntry>,
     window: Arc<Window>,
 }
 
@@ -891,6 +964,8 @@ impl GpuState {
         let text_renderer =
             TextRenderer::new(&mut atlas, &device, MultisampleState::default(), None);
         let text_buffers = Vec::with_capacity(16);
+        let text_order = Vec::with_capacity(16);
+        let geometry_order = Vec::with_capacity(128);
         surface_config.width = surface_config.width.max(1);
         surface_config.height = surface_config.height.max(1);
 
@@ -912,6 +987,8 @@ impl GpuState {
             atlas,
             text_renderer,
             text_buffers,
+            text_order,
+            geometry_order,
             window,
         })
     }
@@ -1020,9 +1097,12 @@ impl GpuState {
             ));
         }
 
-        let mut texts = scene.texts.clone();
-        texts.sort_by_key(|text| text.layer);
-        for (index, text) in texts.iter().enumerate() {
+        self.text_order.clear();
+        self.text_order.extend(0..scene.texts.len());
+        self.text_order.sort_by_key(|&index| scene.texts[index].layer);
+
+        for (index, text_index) in self.text_order.iter().copied().enumerate() {
+            let text = &scene.texts[text_index];
             let buffer = &mut self.text_buffers[index];
             *buffer = GlyphBuffer::new(
                 &mut self.font_system,
@@ -1044,12 +1124,11 @@ impl GpuState {
         }
 
         let mut text_areas = Vec::with_capacity(scene.texts.len());
-        for (index, text) in texts.iter().enumerate() {
-            // SAFETY:
-            // Each loop iteration accesses a distinct buffer slot by index, so the returned mutable
-            // references do not alias each other while `text_areas` is alive for the immediate
-            // `prepare` call below.
-            let buffer = unsafe { &mut *self.text_buffers.as_mut_ptr().add(index) };
+        for (buffer, text_index) in self.text_buffers[..scene.texts.len()]
+            .iter_mut()
+            .zip(self.text_order.iter().copied())
+        {
+            let text = &scene.texts[text_index];
             text_areas.push(TextArea {
                 buffer,
                 left: text.position.x,
@@ -1081,29 +1160,48 @@ impl GpuState {
 
     fn prepare_geometry(&mut self, scene: &Scene2d) {
         self.staging_vertices.clear();
-        let mut geometry = Vec::with_capacity(
+        self.geometry_order.clear();
+        self.geometry_order.reserve(
             scene.panels.len()
                 + scene.lines.len()
                 + scene.circles.len()
                 + scene.textured_quads.len(),
         );
-        for panel in &scene.panels {
-            geometry.push(GeometryPrimitive::Panel(panel));
-        }
-        for textured in &scene.textured_quads {
-            geometry.push(GeometryPrimitive::TexturedQuad(textured));
-        }
-        for line in &scene.lines {
-            geometry.push(GeometryPrimitive::Line(line));
-        }
-        for circle in &scene.circles {
-            geometry.push(GeometryPrimitive::Circle(circle));
-        }
-        geometry.sort_by_key(GeometryPrimitive::layer);
 
-        for primitive in geometry {
-            match primitive {
-                GeometryPrimitive::Panel(panel) => {
+        for (index, panel) in scene.panels.iter().enumerate() {
+            self.geometry_order.push(GeometryOrderEntry {
+                layer: panel.layer,
+                kind: GeometryKind::Panel,
+                index,
+            });
+        }
+        for (index, textured) in scene.textured_quads.iter().enumerate() {
+            self.geometry_order.push(GeometryOrderEntry {
+                layer: textured.layer,
+                kind: GeometryKind::TexturedQuad,
+                index,
+            });
+        }
+        for (index, line) in scene.lines.iter().enumerate() {
+            self.geometry_order.push(GeometryOrderEntry {
+                layer: line.layer,
+                kind: GeometryKind::Line,
+                index,
+            });
+        }
+        for (index, circle) in scene.circles.iter().enumerate() {
+            self.geometry_order.push(GeometryOrderEntry {
+                layer: circle.layer,
+                kind: GeometryKind::Circle,
+                index,
+            });
+        }
+        self.geometry_order.sort_by_key(|entry| entry.layer);
+
+        for entry in &self.geometry_order {
+            match entry.kind {
+                GeometryKind::Panel => {
+                    let panel = &scene.panels[entry.index];
                     push_rect(
                         &mut self.staging_vertices,
                         panel.rect,
@@ -1122,7 +1220,8 @@ impl GpuState {
                         );
                     }
                 }
-                GeometryPrimitive::TexturedQuad(quad) => {
+                GeometryKind::TexturedQuad => {
+                    let quad = &scene.textured_quads[entry.index];
                     // The render layer keeps the textured-quad command available for future sprite
                     // pipelines. Until a texture atlas is bound, it degrades to a tinted panel.
                     push_rect(
@@ -1133,15 +1232,15 @@ impl GpuState {
                         self.surface_config.height,
                     );
                 }
-                GeometryPrimitive::Line(line) => push_line(
+                GeometryKind::Line => push_line(
                     &mut self.staging_vertices,
-                    *line,
+                    scene.lines[entry.index],
                     self.surface_config.width,
                     self.surface_config.height,
                 ),
-                GeometryPrimitive::Circle(circle) => push_circle(
+                GeometryKind::Circle => push_circle(
                     &mut self.staging_vertices,
-                    *circle,
+                    scene.circles[entry.index],
                     self.surface_config.width,
                     self.surface_config.height,
                 ),
@@ -1166,23 +1265,20 @@ impl GpuState {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-enum GeometryPrimitive<'a> {
-    Panel(&'a super::scene::PanelRegion),
-    TexturedQuad(&'a super::scene::TexturedQuad),
-    Line(&'a LineCommand),
-    Circle(&'a CircleCommand),
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum GeometryKind {
+    Panel,
+    TexturedQuad,
+    Line,
+    Circle,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl GeometryPrimitive<'_> {
-    fn layer(&self) -> i32 {
-        match self {
-            Self::Panel(panel) => panel.layer,
-            Self::TexturedQuad(quad) => quad.layer,
-            Self::Line(line) => line.layer,
-            Self::Circle(circle) => circle.layer,
-        }
-    }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct GeometryOrderEntry {
+    layer: i32,
+    kind: GeometryKind,
+    index: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]

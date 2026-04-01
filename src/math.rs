@@ -1,13 +1,19 @@
+//! Deterministic math primitives used by simulation and rendering layers.
+
 use std::cmp::Ordering;
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
 
+/// 2D vector.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Vec2<T> {
+    /// X coordinate.
     pub x: T,
+    /// Y coordinate.
     pub y: T,
 }
 
 impl<T> Vec2<T> {
+    /// Creates a 2D vector.
     pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
@@ -55,14 +61,19 @@ where
     }
 }
 
+/// 3D vector.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Vec3<T> {
+    /// X coordinate.
     pub x: T,
+    /// Y coordinate.
     pub y: T,
+    /// Z coordinate.
     pub z: T,
 }
 
 impl<T> Vec3<T> {
+    /// Creates a 3D vector.
     pub const fn new(x: T, y: T, z: T) -> Self {
         Self { x, y, z }
     }
@@ -90,9 +101,12 @@ where
     }
 }
 
+/// Axis-aligned bounding box in 2D.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Aabb2<T> {
+    /// Minimum corner.
     pub min: Vec2<T>,
+    /// Maximum corner.
     pub max: Vec2<T>,
 }
 
@@ -100,10 +114,12 @@ impl<T> Aabb2<T>
 where
     T: Copy + Ord,
 {
+    /// Creates a 2D AABB.
     pub const fn new(min: Vec2<T>, max: Vec2<T>) -> Self {
         Self { min, max }
     }
 
+    /// Returns whether `point` is inside or on bounds.
     pub fn contains(&self, point: Vec2<T>) -> bool {
         point.x >= self.min.x
             && point.x <= self.max.x
@@ -111,6 +127,7 @@ where
             && point.y <= self.max.y
     }
 
+            /// Returns whether this AABB intersects `other`.
     pub fn intersects(&self, other: &Self) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x
@@ -119,9 +136,12 @@ where
     }
 }
 
+/// Axis-aligned bounding box in 3D.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Aabb3<T> {
+    /// Minimum corner.
     pub min: Vec3<T>,
+    /// Maximum corner.
     pub max: Vec3<T>,
 }
 
@@ -129,10 +149,12 @@ impl<T> Aabb3<T>
 where
     T: Copy + Ord,
 {
+    /// Creates a 3D AABB.
     pub const fn new(min: Vec3<T>, max: Vec3<T>) -> Self {
         Self { min, max }
     }
 
+    /// Returns whether `point` is inside or on bounds.
     pub fn contains(&self, point: Vec3<T>) -> bool {
         point.x >= self.min.x
             && point.x <= self.max.x
@@ -142,6 +164,7 @@ where
             && point.z <= self.max.z
     }
 
+            /// Returns whether this AABB intersects `other`.
     pub fn intersects(&self, other: &Self) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x
@@ -152,30 +175,36 @@ where
     }
 }
 
+/// Fixed-point numeric wrapper with `FRACTION_BITS` fractional bits.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Fixed<const FRACTION_BITS: u32> {
     raw: i64,
 }
 
 impl<const FRACTION_BITS: u32> Fixed<FRACTION_BITS> {
+    /// Creates a fixed-point value from raw representation.
     pub const fn from_raw(raw: i64) -> Self {
         Self { raw }
     }
 
+    /// Creates a fixed-point value from integer input.
     pub const fn from_int(value: i64) -> Self {
         Self {
             raw: value << FRACTION_BITS,
         }
     }
 
+    /// Returns raw fixed-point representation.
     pub const fn raw(self) -> i64 {
         self.raw
     }
 
+    /// Floors value toward negative infinity and returns integer part.
     pub const fn floor_to_int(self) -> i64 {
         self.raw >> FRACTION_BITS
     }
 
+    /// Converts to `f64`.
     pub fn to_f64(self) -> f64 {
         self.raw as f64 / ((1u64 << FRACTION_BITS) as f64)
     }
@@ -215,59 +244,71 @@ impl<const FRACTION_BITS: u32> Div for Fixed<FRACTION_BITS> {
     }
 }
 
+/// `f32` wrapper with deterministic bitwise equality/hash semantics.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct StrictF32 {
     bits: u32,
 }
 
 impl StrictF32 {
+    /// Creates from raw IEEE-754 bits.
     pub const fn from_bits(bits: u32) -> Self {
         Self { bits }
     }
 
+    /// Creates from floating value by preserving raw bits.
     pub fn new(value: f32) -> Self {
         Self {
             bits: value.to_bits(),
         }
     }
 
+    /// Returns raw IEEE-754 bits.
     pub const fn to_bits(self) -> u32 {
         self.bits
     }
 
+    /// Converts to `f32`.
     pub fn to_f32(self) -> f32 {
         f32::from_bits(self.bits)
     }
 }
 
+/// `f64` wrapper with deterministic total ordering and bitwise equality.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct StrictF64 {
     bits: u64,
 }
 
 impl StrictF64 {
+    /// Creates from raw IEEE-754 bits.
     pub const fn from_bits(bits: u64) -> Self {
         Self { bits }
     }
 
+    /// Creates from floating value by preserving raw bits.
     pub fn new(value: f64) -> Self {
         Self {
             bits: value.to_bits(),
         }
     }
 
+    /// Returns raw IEEE-754 bits.
     pub const fn to_bits(self) -> u64 {
         self.bits
     }
 
+    /// Converts to `f64`.
     pub fn to_f64(self) -> f64 {
         f64::from_bits(self.bits)
     }
 
+    /// Returns whether value is finite.
     pub fn is_finite(self) -> bool {
         self.to_f64().is_finite()
     }
 
+    /// Clamps this value to `[min, max]`.
     pub fn clamp(self, min: Self, max: Self) -> Self {
         let value = self.to_f64().clamp(min.to_f64(), max.to_f64());
         Self::new(value)
