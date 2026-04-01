@@ -74,7 +74,7 @@ jobs:
           PY
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo +stable clippy --all-targets --all-features -- -D warnings
 
       - name: Install pinned Verus release
         run: |
