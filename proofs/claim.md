@@ -3,12 +3,14 @@
 This document states what `gameengine` currently claims as formally verified, what is tested,
 and what is intentionally outside full proof scope.
 
-## Formally Verified (Kani Harness Surface)
+## Formally Verified (Kani + Verus Surfaces)
 
 - Fixed-capacity containers and bit-word primitives.
 - Compact reward codec round-trips and range soundness.
+- Compact observation word-shape and reward bit-width constraint enforcement.
 - Deterministic RNG construction and replay properties.
 - Replay rewind restoration for bounded history configurations.
+- Verus replay refinement lemmas and canonical observation-schema model constraints.
 - Builtin game invariants included in harness matrix.
 - Physics invariants and platformer synchronization harnesses for `builtin + physics`.
 

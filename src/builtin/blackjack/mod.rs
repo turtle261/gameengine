@@ -6,10 +6,9 @@ use crate::core::cards::{
     BlackjackValue, evaluate_blackjack_hand, fill_standard_deck_52,
     is_standard_deck_52_permutation, pack_cards_nibbles,
 };
-use crate::core::single_player;
-use crate::game::Game;
+use crate::core::single_player::{self, SinglePlayerRewardBuf};
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+use crate::types::{PlayerId, Seed, StepOutcome, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 const MAX_HAND_CARDS: usize = 12;
 const DECK_SIZE: usize = 52;
@@ -220,27 +219,20 @@ impl Blackjack {
     }
 }
 
-impl Game for Blackjack {
+impl single_player::SinglePlayerGame for Blackjack {
+    type Params = ();
     type State = BlackjackState;
     type Action = BlackjackAction;
-    type PlayerObservation = BlackjackObservation;
-    type SpectatorObservation = BlackjackObservation;
+    type Obs = BlackjackObservation;
     type WorldView = BlackjackWorldView;
-    type PlayerBuf = FixedVec<PlayerId, 1>;
     type ActionBuf = FixedVec<BlackjackAction, 2>;
-    type JointActionBuf = FixedVec<PlayerAction<BlackjackAction>, 1>;
-    type RewardBuf = FixedVec<PlayerReward, 1>;
     type WordBuf = FixedVec<u64, 4>;
 
     fn name(&self) -> &'static str {
         "blackjack"
     }
 
-    fn player_count(&self) -> usize {
-        1
-    }
-
-    fn init(&self, seed: Seed) -> Self::State {
+    fn init_with_params(&self, seed: Seed, _params: &Self::Params) -> Self::State {
         let mut rng = DeterministicRng::from_seed_and_stream(seed, 0);
         let mut deck = [0u8; DECK_SIZE];
         Self::fill_deck(&mut deck);
@@ -272,13 +264,9 @@ impl Game for Blackjack {
         matches!(state.phase, BlackjackPhase::Terminal)
     }
 
-    fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
-        single_player::write_players_to_act(out, self.is_terminal(state));
-    }
-
-    fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Self::ActionBuf) {
+    fn legal_actions(&self, state: &Self::State, out: &mut Self::ActionBuf) {
         out.clear();
-        if !single_player::can_act(player, self.is_terminal(state)) {
+        if self.is_terminal(state) {
             return;
         }
         let value = Self::player_value(state);
@@ -290,7 +278,7 @@ impl Game for Blackjack {
         }
     }
 
-    fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::PlayerObservation {
+    fn observe_player(&self, state: &Self::State) -> Self::Obs {
         let terminal = self.is_terminal(state);
         let opponent_visible_len = if terminal { state.opponent_len } else { 0 };
         let mut opponent_cards = [0u8; MAX_HAND_CARDS];
@@ -311,7 +299,7 @@ impl Game for Blackjack {
         }
     }
 
-    fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
+    fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
         BlackjackObservation {
             phase: state.phase,
             terminal: self.is_terminal(state),
@@ -333,12 +321,10 @@ impl Game for Blackjack {
     fn step_in_place(
         &self,
         state: &mut Self::State,
-        joint_actions: &Self::JointActionBuf,
+        action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<Self::RewardBuf>,
+        out: &mut StepOutcome<SinglePlayerRewardBuf>,
     ) {
-        let action = single_player::first_action(joint_actions.as_slice());
-
         let reward = if self.is_terminal(state) {
             out.termination = Termination::Terminal {
                 winner: state.winner,
@@ -418,12 +404,7 @@ impl Game for Blackjack {
         }
     }
 
-    fn player_observation_invariant(
-        &self,
-        state: &Self::State,
-        _player: PlayerId,
-        observation: &Self::PlayerObservation,
-    ) -> bool {
+    fn player_observation_invariant(&self, state: &Self::State, observation: &Self::Obs) -> bool {
         if self.is_terminal(state) {
             observation.opponent_visible_len == state.opponent_len
                 && observation.opponent_cards == state.opponent_cards
@@ -443,9 +424,9 @@ impl Game for Blackjack {
     fn transition_postcondition(
         &self,
         _pre: &Self::State,
-        _actions: &Self::JointActionBuf,
+        _action: Option<Self::Action>,
         post: &Self::State,
-        outcome: &StepOutcome<Self::RewardBuf>,
+        outcome: &StepOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         reward_and_terminal_postcondition(
             outcome.reward_for(0),
@@ -476,11 +457,7 @@ impl Game for Blackjack {
         decode_enum_action(encoded, &BLACKJACK_ACTION_ORDER)
     }
 
-    fn encode_player_observation(
-        &self,
-        observation: &Self::PlayerObservation,
-        out: &mut Self::WordBuf,
-    ) {
+    fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         let header = Self::phase_code(observation.phase)
             | ((observation.terminal as u64) << 4)
             | ((u64::from(observation.player_len)) << 8)
@@ -497,11 +474,7 @@ impl Game for Blackjack {
         );
     }
 
-    fn encode_spectator_observation(
-        &self,
-        observation: &Self::SpectatorObservation,
-        out: &mut Self::WordBuf,
-    ) {
+    fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         let header = Self::phase_code(observation.phase)
             | ((observation.terminal as u64) << 4)
             | ((u64::from(observation.player_len)) << 8)

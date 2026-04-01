@@ -13,14 +13,14 @@ use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome};
 /// Implementations provide pure state transition logic plus compact codec hooks
 /// for actions and observations.
 pub trait Game {
+    /// Parameter bundle used to initialize/reset game state.
+    type Params: Clone + Debug + Default + Eq + Hash + PartialEq;
     /// Concrete game state.
     type State: Clone + Debug + Default + Eq + Hash + PartialEq;
     /// Atomic player action type.
     type Action: Clone + Copy + Debug + Default + Eq + Hash + PartialEq;
-    /// Per-player observation type.
-    type PlayerObservation: Clone + Debug + Default + Eq + PartialEq;
-    /// Spectator observation type.
-    type SpectatorObservation: Clone + Debug + Default + Eq + PartialEq;
+    /// Canonical observation type shared across all viewpoints.
+    type Obs: Clone + Debug + Default + Eq + PartialEq;
     /// Render/debug world view type.
     type WorldView: Clone + Debug + Default + Eq + PartialEq;
     /// Buffer type for active-player lists.
@@ -44,8 +44,19 @@ pub trait Game {
     fn name(&self) -> &'static str;
     /// Total number of players in the game.
     fn player_count(&self) -> usize;
+    /// Returns default parameter bundle used by `init` and `SessionKernel::new`.
+    fn default_params(&self) -> Self::Params {
+        Self::Params::default()
+    }
+
+    /// Initialize deterministic state from a seed and parameter bundle.
+    fn init_with_params(&self, seed: Seed, params: &Self::Params) -> Self::State;
+
     /// Initialize the deterministic state from a seed.
-    fn init(&self, seed: Seed) -> Self::State;
+    fn init(&self, seed: Seed) -> Self::State {
+        let params = self.default_params();
+        self.init_with_params(seed, &params)
+    }
     /// Whether the state is terminal.
     fn is_terminal(&self, state: &Self::State) -> bool;
     /// Emit active players for the current tick.
@@ -53,9 +64,9 @@ pub trait Game {
     /// Emit legal actions for a player in the current state.
     fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Self::ActionBuf);
     /// Build a player-scoped observation.
-    fn observe_player(&self, state: &Self::State, player: PlayerId) -> Self::PlayerObservation;
+    fn observe_player(&self, state: &Self::State, player: PlayerId) -> Self::Obs;
     /// Build a spectator observation.
-    fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation;
+    fn observe_spectator(&self, state: &Self::State) -> Self::Obs;
     /// Build a world/debug view consumed by render and tooling.
     fn world_view(&self, state: &Self::State) -> Self::WorldView;
     /// Apply one transition in-place.
@@ -97,21 +108,13 @@ pub trait Game {
     }
 
     /// Encode a player observation into compact words.
-    fn encode_player_observation(
-        &self,
-        observation: &Self::PlayerObservation,
-        out: &mut Self::WordBuf,
-    ) {
+    fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         let _ = observation;
         out.clear();
     }
 
     /// Encode a spectator observation into compact words.
-    fn encode_spectator_observation(
-        &self,
-        observation: &Self::SpectatorObservation,
-        out: &mut Self::WordBuf,
-    ) {
+    fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         let _ = observation;
         out.clear();
     }
@@ -124,20 +127,9 @@ pub trait Game {
 
     /// Validate compact observation shape against the declared compact spec.
     fn compact_invariant(&self, words: &Self::WordBuf) -> bool {
-        let spec = self.compact_spec();
-        if words.len() != spec.observation_stream_len {
-            return false;
-        }
-        let max_value = spec.max_observation_value();
-        let slice = words.as_slice();
-        let mut index = 0usize;
-        while index < slice.len() {
-            if slice[index] > max_value {
-                return false;
-            }
-            index += 1;
-        }
-        true
+        self.compact_spec()
+            .validate_observation_words(words.as_slice())
+            .is_ok()
     }
 
     /// State invariant used by checked stepping and proof helpers.
@@ -155,7 +147,7 @@ pub trait Game {
         &self,
         _state: &Self::State,
         _player: PlayerId,
-        _observation: &Self::PlayerObservation,
+        _observation: &Self::Obs,
     ) -> bool {
         true
     }
@@ -164,7 +156,7 @@ pub trait Game {
     fn spectator_observation_invariant(
         &self,
         _state: &Self::State,
-        _observation: &Self::SpectatorObservation,
+        _observation: &Self::Obs,
     ) -> bool {
         true
     }

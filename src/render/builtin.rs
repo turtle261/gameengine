@@ -809,7 +809,7 @@ mod tests {
     use crate::session::Session;
 
     type TicTacToeDriver =
-        TurnBasedDriver<TicTacToe, crate::session::FixedHistory<TicTacToe, 256, 32, 8>>;
+        TurnBasedDriver<TicTacToe, crate::session::DynamicHistory<TicTacToe, 512, 8>>;
 
     fn tictactoe_view() -> (TicTacToeDriver, FrameMetrics) {
         (

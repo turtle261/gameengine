@@ -2,10 +2,9 @@
 
 use crate::buffer::FixedVec;
 use crate::compact::CompactSpec;
-use crate::core::single_player;
-use crate::game::Game;
+use crate::core::single_player::{self, SinglePlayerRewardBuf};
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+use crate::types::{PlayerId, Seed, StepOutcome, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 
 const WIN_LINES: [(usize, usize, usize); 8] = [
@@ -92,6 +91,79 @@ impl TicTacToe {
         true
     }
 
+    fn decode_action_index(action: Option<TicTacToeAction>) -> Option<usize> {
+        action.map(|action: TicTacToeAction| action.0 as usize)
+    }
+
+    fn action_is_legal(state: &TicTacToeState, index: usize) -> bool {
+        index < state.board.len() && state.board[index] == TicTacToeCell::Empty
+    }
+
+    fn apply_mark(
+        state: &mut TicTacToeState,
+        index: usize,
+        mark: TicTacToeCell,
+    ) -> Option<Option<PlayerId>> {
+        state.board[index] = mark;
+        let winner = Self::find_winner(&state.board);
+        if winner.is_some() || Self::is_full(&state.board) {
+            state.terminal = true;
+            state.winner = winner;
+            Some(winner)
+        } else {
+            None
+        }
+    }
+
+    fn sample_opponent_action(state: &TicTacToeState, rng: &mut DeterministicRng) -> usize {
+        let mut empty_positions = [0usize; 9];
+        let mut empty_len = 0usize;
+        let mut index = 0usize;
+        while index < state.board.len() {
+            if state.board[index] == TicTacToeCell::Empty {
+                empty_positions[empty_len] = index;
+                empty_len += 1;
+            }
+            index += 1;
+        }
+        empty_positions[rng.gen_range(empty_len)]
+    }
+
+    fn reward_from_terminal_winner(winner: Option<PlayerId>) -> i64 {
+        match winner {
+            Some(0) => 2,
+            Some(_) => -2,
+            None => 1,
+        }
+    }
+
+    fn resolve_turn(
+        state: &mut TicTacToeState,
+        action_index: usize,
+        rng: &mut DeterministicRng,
+    ) -> i64 {
+        if let Some(winner) = Self::apply_mark(state, action_index, TicTacToeCell::Player) {
+            return Self::reward_from_terminal_winner(winner);
+        }
+
+        let opponent_index = Self::sample_opponent_action(state, rng);
+        if let Some(winner) = Self::apply_mark(state, opponent_index, TicTacToeCell::Opponent) {
+            return Self::reward_from_terminal_winner(winner);
+        }
+
+        0
+    }
+
+    fn termination_from_state(state: &TicTacToeState) -> Termination {
+        if state.terminal {
+            Termination::Terminal {
+                winner: state.winner,
+            }
+        } else {
+            Termination::Ongoing
+        }
+    }
+
     /// Packs board cells into a two-bit-per-cell `u64` representation.
     pub fn packed_board(board: &[TicTacToeCell; 9]) -> u64 {
         let mut packed = 0u64;
@@ -109,27 +181,20 @@ impl TicTacToe {
     }
 }
 
-impl Game for TicTacToe {
+impl single_player::SinglePlayerGame for TicTacToe {
+    type Params = ();
     type State = TicTacToeState;
     type Action = TicTacToeAction;
-    type PlayerObservation = TicTacToeObservation;
-    type SpectatorObservation = TicTacToeObservation;
+    type Obs = TicTacToeObservation;
     type WorldView = TicTacToeWorldView;
-    type PlayerBuf = FixedVec<PlayerId, 1>;
     type ActionBuf = FixedVec<TicTacToeAction, 9>;
-    type JointActionBuf = FixedVec<PlayerAction<TicTacToeAction>, 1>;
-    type RewardBuf = FixedVec<PlayerReward, 1>;
     type WordBuf = FixedVec<u64, 1>;
 
     fn name(&self) -> &'static str {
         "tictactoe"
     }
 
-    fn player_count(&self) -> usize {
-        1
-    }
-
-    fn init(&self, _seed: Seed) -> Self::State {
+    fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
         TicTacToeState::default()
     }
 
@@ -137,13 +202,9 @@ impl Game for TicTacToe {
         state.terminal
     }
 
-    fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
-        single_player::write_players_to_act(out, state.terminal);
-    }
-
-    fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Self::ActionBuf) {
+    fn legal_actions(&self, state: &Self::State, out: &mut Self::ActionBuf) {
         out.clear();
-        if !single_player::can_act(player, state.terminal) {
+        if state.terminal {
             return;
         }
         let mut index = 0usize;
@@ -155,11 +216,7 @@ impl Game for TicTacToe {
         }
     }
 
-    fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::PlayerObservation {
-        *state
-    }
-
-    fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
+    fn observe_player(&self, state: &Self::State) -> Self::Obs {
         *state
     }
 
@@ -170,73 +227,23 @@ impl Game for TicTacToe {
     fn step_in_place(
         &self,
         state: &mut Self::State,
-        joint_actions: &Self::JointActionBuf,
+        action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<Self::RewardBuf>,
+        out: &mut StepOutcome<SinglePlayerRewardBuf>,
     ) {
-        let action = single_player::first_action(joint_actions.as_slice())
-            .map(|candidate: TicTacToeAction| candidate.0 as usize);
-
         let reward = if state.terminal {
-            out.termination = Termination::Terminal {
-                winner: state.winner,
-            };
             0
-        } else if let Some(index) = action {
-            if index >= 9 || state.board[index] != TicTacToeCell::Empty {
-                -3
-            } else {
-                state.board[index] = TicTacToeCell::Player;
-                if let Some(winner) = Self::find_winner(&state.board) {
-                    state.terminal = true;
-                    state.winner = Some(winner);
-                    out.termination = Termination::Terminal {
-                        winner: state.winner,
-                    };
-                    2
-                } else if Self::is_full(&state.board) {
-                    state.terminal = true;
-                    state.winner = None;
-                    out.termination = Termination::Terminal { winner: None };
-                    1
-                } else {
-                    let mut empty_positions = [0usize; 9];
-                    let mut empty_len = 0usize;
-                    let mut cell_index = 0usize;
-                    while cell_index < state.board.len() {
-                        if state.board[cell_index] == TicTacToeCell::Empty {
-                            empty_positions[empty_len] = cell_index;
-                            empty_len += 1;
-                        }
-                        cell_index += 1;
-                    }
-                    let opponent_index = empty_positions[rng.gen_range(empty_len)];
-                    state.board[opponent_index] = TicTacToeCell::Opponent;
-                    if let Some(winner) = Self::find_winner(&state.board) {
-                        state.terminal = true;
-                        state.winner = Some(winner);
-                        out.termination = Termination::Terminal {
-                            winner: state.winner,
-                        };
-                        -2
-                    } else if Self::is_full(&state.board) {
-                        state.terminal = true;
-                        state.winner = None;
-                        out.termination = Termination::Terminal { winner: None };
-                        1
-                    } else {
-                        0
-                    }
-                }
-            }
         } else {
-            -3
+            match Self::decode_action_index(action) {
+                Some(index) if Self::action_is_legal(state, index) => {
+                    Self::resolve_turn(state, index, rng)
+                }
+                _ => -3,
+            }
         };
 
         single_player::push_reward(&mut out.rewards, reward);
-        if !state.terminal {
-            out.termination = Termination::Ongoing;
-        }
+        out.termination = Self::termination_from_state(state);
     }
 
     fn compact_spec(&self) -> CompactSpec {
@@ -259,21 +266,9 @@ impl Game for TicTacToe {
         (encoded < 9).then_some(TicTacToeAction(encoded as u8))
     }
 
-    fn encode_player_observation(
-        &self,
-        observation: &Self::PlayerObservation,
-        out: &mut Self::WordBuf,
-    ) {
+    fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         out.clear();
         out.push(Self::packed_board(&observation.board)).unwrap();
-    }
-
-    fn encode_spectator_observation(
-        &self,
-        observation: &Self::SpectatorObservation,
-        out: &mut Self::WordBuf,
-    ) {
-        self.encode_player_observation(observation, out);
     }
 
     fn state_invariant(&self, state: &Self::State) -> bool {
@@ -290,9 +285,9 @@ impl Game for TicTacToe {
     fn transition_postcondition(
         &self,
         pre: &Self::State,
-        _actions: &Self::JointActionBuf,
+        _action: Option<Self::Action>,
         post: &Self::State,
-        outcome: &StepOutcome<Self::RewardBuf>,
+        outcome: &StepOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         if pre.terminal {
             return post == pre && outcome.reward_for(0) == 0 && outcome.is_terminal();

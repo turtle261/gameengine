@@ -14,7 +14,7 @@ pub trait Policy<G: Game> {
         game: &G,
         state: &G::State,
         player: PlayerId,
-        observation: &G::PlayerObservation,
+        observation: &G::Obs,
         legal_actions: &[G::Action],
         rng: &mut DeterministicRng,
     ) -> G::Action;
@@ -30,7 +30,7 @@ impl<G: Game> Policy<G> for FirstLegalPolicy {
         _game: &G,
         _state: &G::State,
         _player: PlayerId,
-        _observation: &G::PlayerObservation,
+        _observation: &G::Obs,
         legal_actions: &[G::Action],
         _rng: &mut DeterministicRng,
     ) -> G::Action {
@@ -51,7 +51,7 @@ impl<G: Game> Policy<G> for RandomPolicy {
         _game: &G,
         _state: &G::State,
         _player: PlayerId,
-        _observation: &G::PlayerObservation,
+        _observation: &G::Obs,
         legal_actions: &[G::Action],
         rng: &mut DeterministicRng,
     ) -> G::Action {
@@ -97,7 +97,7 @@ where
         _game: &G,
         _state: &G::State,
         _player: PlayerId,
-        _observation: &G::PlayerObservation,
+        _observation: &G::Obs,
         legal_actions: &[G::Action],
         _rng: &mut DeterministicRng,
     ) -> G::Action {
@@ -144,21 +144,14 @@ impl<G, F> FnPolicy<G, F> {
 impl<G, F> Policy<G> for FnPolicy<G, F>
 where
     G: Game,
-    F: FnMut(
-        &G,
-        &G::State,
-        PlayerId,
-        &G::PlayerObservation,
-        &[G::Action],
-        &mut DeterministicRng,
-    ) -> G::Action,
+    F: FnMut(&G, &G::State, PlayerId, &G::Obs, &[G::Action], &mut DeterministicRng) -> G::Action,
 {
     fn choose_action(
         &mut self,
         game: &G,
         state: &G::State,
         player: PlayerId,
-        observation: &G::PlayerObservation,
+        observation: &G::Obs,
         legal_actions: &[G::Action],
         rng: &mut DeterministicRng,
     ) -> G::Action {

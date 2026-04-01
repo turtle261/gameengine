@@ -3,6 +3,7 @@
 use core::fmt;
 
 use crate::buffer::{Buffer, FixedVec};
+use crate::compact::CompactError;
 use crate::core::observe::{Observe, Observer};
 use crate::session::{HistoryStore, SessionKernel};
 use crate::types::{PlayerAction, PlayerId, Reward, Seed};
@@ -68,6 +69,11 @@ pub enum EnvError {
         /// Maximum words accepted by this environment wrapper.
         max_words: usize,
     },
+    /// Observation stream violated the compact schema constraints.
+    InvalidObservationEncoding {
+        /// Canonical compact constraint violation details.
+        reason: CompactError,
+    },
     /// Reward cannot be represented by the configured compact reward range.
     RewardOutOfRange {
         /// Raw out-of-range reward.
@@ -76,6 +82,11 @@ pub enum EnvError {
         min: Reward,
         /// Maximum representable reward.
         max: Reward,
+    },
+    /// Reward encoding violated compact schema constraints.
+    InvalidRewardEncoding {
+        /// Canonical compact constraint violation details.
+        reason: CompactError,
     },
     /// Selected agent player id is outside game player range.
     InvalidAgentPlayer {
@@ -102,11 +113,17 @@ impl fmt::Display for EnvError {
                     "observation packet requires {actual_words} words but maximum is {max_words}"
                 )
             }
+            Self::InvalidObservationEncoding { reason } => {
+                write!(f, "observation does not satisfy compact schema: {reason}")
+            }
             Self::RewardOutOfRange { reward, min, max } => {
                 write!(
                     f,
                     "reward {reward} is outside compact spec range [{min}, {max}]"
                 )
+            }
+            Self::InvalidRewardEncoding { reason } => {
+                write!(f, "reward does not satisfy compact schema: {reason}")
             }
             Self::InvalidAgentPlayer {
                 player,
@@ -123,8 +140,18 @@ impl std::error::Error for EnvError {}
 
 /// Minimal infotheory-compatible compact environment interface.
 pub trait InfotheoryEnvironment<const MAX_WORDS: usize> {
+    /// Parameter bundle used to initialize/reset environment state.
+    type Params;
+
     /// Resets environment state and returns initial compact observation.
     fn reset_seed(&mut self, seed: Seed) -> Result<BitPacket<MAX_WORDS>, EnvError>;
+
+    /// Resets environment state from explicit params and returns compact observation.
+    fn reset_seed_with_params(
+        &mut self,
+        seed: Seed,
+        params: Self::Params,
+    ) -> Result<BitPacket<MAX_WORDS>, EnvError>;
 
     /// Steps environment using compact action bits.
     fn step_bits(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError>;
@@ -142,26 +169,32 @@ where
     agent_player: PlayerId,
 }
 
-/// Default environment alias with fixed history and packet capacity.
+/// Default environment alias with dynamic history and packet capacity.
 pub type DefaultEnvironment<G, const MAX_WORDS: usize = 16> =
-    Environment<G, crate::session::FixedHistory<G, 256, 32, 8>, MAX_WORDS>;
+    Environment<G, crate::session::DynamicHistory<G, 512, 8>, MAX_WORDS>;
 
 impl<G, H, const MAX_WORDS: usize> Environment<G, H, MAX_WORDS>
 where
     G: Observe,
     H: HistoryStore<G>,
 {
-    /// Creates a new compact environment.
-    pub fn new(game: G, seed: Seed, observer: Observer) -> Self {
+    /// Creates a new compact environment initialized with explicit params.
+    pub fn new_with_params(game: G, seed: Seed, observer: Observer, params: G::Params) -> Self {
         let agent_player = match observer {
             Observer::Player(player) => player,
             Observer::Spectator => 0,
         };
         Self {
-            session: SessionKernel::new(game, seed),
+            session: SessionKernel::new_with_params(game, seed, params),
             observer,
             agent_player,
         }
+    }
+
+    /// Creates a new compact environment.
+    pub fn new(game: G, seed: Seed, observer: Observer) -> Self {
+        let params = game.default_params();
+        Self::new_with_params(game, seed, observer, params)
     }
 
     /// Returns immutable access to the underlying session kernel.
@@ -203,6 +236,16 @@ where
         self.encode_current_observation()
     }
 
+    /// Resets state from explicit params and returns initial compact observation.
+    pub fn reset_with_params(
+        &mut self,
+        seed: Seed,
+        params: G::Params,
+    ) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+        self.session.reset_with_params(seed, params);
+        self.encode_current_observation()
+    }
+
     /// Steps the environment from an encoded action value.
     pub fn step(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError> {
         if self.session.is_terminal() {
@@ -237,13 +280,16 @@ where
         };
 
         let spec = self.session.game().compact_spec();
-        let encoded_reward =
-            spec.try_encode_reward(reward)
-                .map_err(|_| EnvError::RewardOutOfRange {
+        let encoded_reward = spec
+            .try_encode_reward(reward)
+            .map_err(|reason| match reason {
+                CompactError::RewardOutOfRange { .. } => EnvError::RewardOutOfRange {
                     reward,
                     min: spec.min_reward,
                     max: spec.max_reward,
-                })?;
+                },
+                other => EnvError::InvalidRewardEncoding { reason: other },
+            })?;
 
         Ok(EnvStep {
             observation_bits: self.encode_current_observation()?,
@@ -268,6 +314,11 @@ where
                 max_words: MAX_WORDS,
             });
         }
+        self.session
+            .game()
+            .compact_spec()
+            .validate_observation_words(encoded.as_slice())
+            .map_err(|reason| EnvError::InvalidObservationEncoding { reason })?;
 
         let mut packet = BitPacket::default();
         for &word in encoded.as_slice() {
@@ -282,9 +333,20 @@ where
     G: Observe,
     H: HistoryStore<G>,
 {
+    type Params = G::Params;
+
     /// Resets environment and emits initial packet.
     fn reset_seed(&mut self, seed: Seed) -> Result<BitPacket<MAX_WORDS>, EnvError> {
         self.reset(seed)
+    }
+
+    /// Resets environment from explicit params and emits initial packet.
+    fn reset_seed_with_params(
+        &mut self,
+        seed: Seed,
+        params: Self::Params,
+    ) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+        self.reset_with_params(seed, params)
     }
 
     /// Steps environment with compact action bits.
@@ -308,6 +370,7 @@ mod regression_tests {
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct DemoState {
         terminal: bool,
+        marker: u8,
     }
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -316,17 +379,27 @@ mod regression_tests {
         Step,
     }
 
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct BadObservationGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct BadRewardGame;
+
     impl Game for DemoGame {
+        type Params = u8;
         type State = DemoState;
         type Action = DemoAction;
-        type PlayerObservation = u8;
-        type SpectatorObservation = u8;
+        type Obs = u8;
         type WorldView = u8;
         type PlayerBuf = FixedVec<PlayerId, 2>;
         type ActionBuf = FixedVec<DemoAction, 1>;
         type JointActionBuf = FixedVec<PlayerAction<DemoAction>, 2>;
         type RewardBuf = FixedVec<PlayerReward, 2>;
         type WordBuf = FixedVec<u64, 1>;
+
+        fn default_params(&self) -> Self::Params {
+            0
+        }
 
         fn name(&self) -> &'static str {
             "demo"
@@ -336,8 +409,11 @@ mod regression_tests {
             2
         }
 
-        fn init(&self, _seed: Seed) -> Self::State {
-            DemoState { terminal: false }
+        fn init_with_params(&self, _seed: Seed, params: &Self::Params) -> Self::State {
+            DemoState {
+                terminal: false,
+                marker: *params,
+            }
         }
 
         fn is_terminal(&self, state: &Self::State) -> bool {
@@ -359,15 +435,11 @@ mod regression_tests {
             }
         }
 
-        fn observe_player(
-            &self,
-            _state: &Self::State,
-            player: PlayerId,
-        ) -> Self::PlayerObservation {
+        fn observe_player(&self, _state: &Self::State, player: PlayerId) -> Self::Obs {
             player as u8
         }
 
-        fn observe_spectator(&self, _state: &Self::State) -> Self::SpectatorObservation {
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
             99
         }
 
@@ -420,22 +492,209 @@ mod regression_tests {
             (encoded == 0).then_some(DemoAction::Step)
         }
 
-        fn encode_player_observation(
-            &self,
-            observation: &Self::PlayerObservation,
-            out: &mut Self::WordBuf,
-        ) {
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
             out.clear();
             out.push(100 + u64::from(*observation)).unwrap();
         }
 
-        fn encode_spectator_observation(
-            &self,
-            observation: &Self::SpectatorObservation,
-            out: &mut Self::WordBuf,
-        ) {
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
             out.clear();
             out.push(200 + u64::from(*observation)).unwrap();
+        }
+    }
+
+    impl Game for BadObservationGame {
+        type Params = ();
+        type State = ();
+        type Action = u8;
+        type Obs = u8;
+        type WorldView = ();
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "bad-observation"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {}
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn observe_player(&self, _state: &Self::State, _player: PlayerId) -> Self::Obs {
+            8
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
+            8
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
+
+        fn step_in_place(
+            &self,
+            _state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 0,
+                })
+                .unwrap();
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: 1,
+                observation_bits: 3,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 0,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            u64::from(*action)
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(0)
+        }
+
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            out.clear();
+            out.push(u64::from(*observation)).unwrap();
+        }
+
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            self.encode_player_observation(observation, out);
+        }
+    }
+
+    impl Game for BadRewardGame {
+        type Params = ();
+        type State = bool;
+        type Action = u8;
+        type Obs = u8;
+        type WorldView = ();
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "bad-reward"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
+            false
+        }
+
+        fn is_terminal(&self, state: &Self::State) -> bool {
+            *state
+        }
+
+        fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            if !*state {
+                out.push(0).unwrap();
+            }
+        }
+
+        fn legal_actions(&self, state: &Self::State, _player: PlayerId, out: &mut Self::ActionBuf) {
+            out.clear();
+            if !*state {
+                out.push(0).unwrap();
+            }
+        }
+
+        fn observe_player(&self, _state: &Self::State, _player: PlayerId) -> Self::Obs {
+            0
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
+            0
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
+
+        fn step_in_place(
+            &self,
+            state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 3,
+                })
+                .unwrap();
+            *state = true;
+            out.termination = Termination::Terminal { winner: Some(0) };
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: 1,
+                observation_bits: 1,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 3,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            u64::from(*action)
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(0)
+        }
+
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            out.clear();
+            out.push(u64::from(*observation)).unwrap();
+        }
+
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            self.encode_player_observation(observation, out);
         }
     }
 
@@ -460,6 +719,275 @@ mod regression_tests {
         let env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Spectator);
         let packet = env.encode_current_observation().unwrap();
         assert_eq!(packet.words(), &[299]);
+    }
+
+    #[test]
+    fn reset_with_params_updates_session_seed_params_state() {
+        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
+        assert_eq!(env.session().state().marker, 0);
+        env.reset_with_params(11, 42).unwrap();
+        assert_eq!(env.session().current_tick(), 0);
+        assert_eq!(env.session().state().marker, 42);
+    }
+
+    #[test]
+    fn observation_schema_violations_are_rejected() {
+        let env = DefaultEnvironment::<BadObservationGame, 1>::new(
+            BadObservationGame,
+            1,
+            Observer::Player(0),
+        );
+        assert!(matches!(
+            env.encode_current_observation(),
+            Err(EnvError::InvalidObservationEncoding { .. })
+        ));
+    }
+
+    #[test]
+    fn reward_bit_width_violations_are_rejected() {
+        let mut env =
+            DefaultEnvironment::<BadRewardGame, 1>::new(BadRewardGame, 1, Observer::Player(0));
+        assert!(matches!(
+            env.step(0),
+            Err(EnvError::InvalidRewardEncoding { .. })
+        ));
+    }
+}
+
+#[cfg(kani)]
+mod proofs {
+    use super::{DefaultEnvironment, EnvError, Observer};
+    use crate::buffer::FixedVec;
+    use crate::compact::CompactSpec;
+    use crate::game::Game;
+    use crate::rng::DeterministicRng;
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct ObservationViolationGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct RewardBitsViolationGame;
+
+    impl Game for ObservationViolationGame {
+        type Params = ();
+        type State = ();
+        type Action = u8;
+        type Obs = u8;
+        type WorldView = ();
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "observation-violation"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {}
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn observe_player(&self, _state: &Self::State, _player: PlayerId) -> Self::Obs {
+            8
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
+            8
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
+
+        fn step_in_place(
+            &self,
+            _state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 0,
+                })
+                .unwrap();
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: 1,
+                observation_bits: 3,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 0,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            u64::from(*action)
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(0)
+        }
+
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            out.clear();
+            out.push(u64::from(*observation)).unwrap();
+        }
+
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            self.encode_player_observation(observation, out);
+        }
+    }
+
+    impl Game for RewardBitsViolationGame {
+        type Params = ();
+        type State = bool;
+        type Action = u8;
+        type Obs = u8;
+        type WorldView = ();
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "reward-violation"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
+            false
+        }
+
+        fn is_terminal(&self, state: &Self::State) -> bool {
+            *state
+        }
+
+        fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            if !*state {
+                out.push(0).unwrap();
+            }
+        }
+
+        fn legal_actions(&self, state: &Self::State, _player: PlayerId, out: &mut Self::ActionBuf) {
+            out.clear();
+            if !*state {
+                out.push(0).unwrap();
+            }
+        }
+
+        fn observe_player(&self, _state: &Self::State, _player: PlayerId) -> Self::Obs {
+            0
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
+            0
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
+
+        fn step_in_place(
+            &self,
+            state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 3,
+                })
+                .unwrap();
+            *state = true;
+            out.termination = Termination::Terminal { winner: Some(0) };
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: 1,
+                observation_bits: 1,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 3,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            u64::from(*action)
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(0)
+        }
+
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            out.clear();
+            out.push(u64::from(*observation)).unwrap();
+        }
+
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            self.encode_player_observation(observation, out);
+        }
+    }
+
+    #[kani::proof]
+    fn env_rejects_invalid_observation_words() {
+        let env = DefaultEnvironment::<ObservationViolationGame, 1>::new(
+            ObservationViolationGame,
+            1,
+            Observer::Player(0),
+        );
+        assert!(matches!(
+            env.encode_current_observation(),
+            Err(EnvError::InvalidObservationEncoding { .. })
+        ));
+    }
+
+    #[kani::proof]
+    fn env_rejects_reward_encoding_that_exceeds_bit_width() {
+        let mut env = DefaultEnvironment::<RewardBitsViolationGame, 1>::new(
+            RewardBitsViolationGame,
+            1,
+            Observer::Player(0),
+        );
+        assert!(matches!(
+            env.step(0),
+            Err(EnvError::InvalidRewardEncoding { .. })
+        ));
     }
 }
 

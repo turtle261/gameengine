@@ -8,6 +8,7 @@ pub mod stepper;
 
 pub use crate::buffer::{BitWords, Buffer, CapacityError, FixedVec};
 pub use crate::compact::CompactSpec;
+pub use crate::core::single_player::SinglePlayerGame;
 pub use crate::game::Game;
 pub use crate::rng::{DeterministicRng, SplitMix64};
 pub use crate::session::{

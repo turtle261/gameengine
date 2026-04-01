@@ -11,7 +11,7 @@ use crate::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 use crate::builtin::{Platformer, PlatformerAction};
 use crate::core::observe::{Observe, Observer};
 use crate::policy::{FirstLegalPolicy, Policy, RandomPolicy, ScriptedPolicy};
-use crate::registry::{GameKind, all_games, find_game};
+use crate::registry::{all_games, find_game};
 #[cfg(feature = "render")]
 use crate::render::{PassivePolicyDriver, RenderConfig, RenderMode, RendererApp, TurnBasedDriver};
 #[cfg(all(feature = "render", feature = "physics"))]
@@ -21,7 +21,7 @@ use crate::session::InteractiveSession;
 use crate::{Game, Session, stable_hash};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum RunMode {
+pub(crate) enum RunMode {
     Play,
     Replay,
 }
@@ -104,17 +104,12 @@ where
 
 fn run_descriptor(game_name: &str, config: CliConfig, mode: RunMode) -> Result<(), String> {
     let descriptor = find_game(game_name).ok_or_else(|| format!("unknown game: {game_name}"))?;
-    match descriptor.kind {
-        GameKind::TicTacToe => run_tictactoe(config, mode),
-        GameKind::Blackjack => run_blackjack(config, mode),
-        #[cfg(feature = "physics")]
-        GameKind::Platformer => run_platformer(config, mode),
-    }
+    (descriptor.runner)(config, mode)
 }
 
 /// Parsed command-line execution configuration.
 #[derive(Clone, Debug)]
-pub struct CliConfig {
+pub(crate) struct CliConfig {
     seed: u64,
     max_steps: usize,
     policy: String,
@@ -230,7 +225,7 @@ where
     Ok(())
 }
 
-fn run_tictactoe(config: CliConfig, mode: RunMode) -> Result<(), String> {
+pub(crate) fn run_tictactoe(config: CliConfig, mode: RunMode) -> Result<(), String> {
     if config.render_physics {
         return Err("tictactoe does not support --render-physics".to_string());
     }
@@ -252,7 +247,7 @@ fn run_tictactoe(config: CliConfig, mode: RunMode) -> Result<(), String> {
     )
 }
 
-fn run_blackjack(config: CliConfig, mode: RunMode) -> Result<(), String> {
+pub(crate) fn run_blackjack(config: CliConfig, mode: RunMode) -> Result<(), String> {
     if config.render_physics {
         return Err("blackjack does not support --render-physics".to_string());
     }
@@ -275,7 +270,7 @@ fn run_blackjack(config: CliConfig, mode: RunMode) -> Result<(), String> {
 }
 
 #[cfg(feature = "physics")]
-fn run_platformer(config: CliConfig, mode: RunMode) -> Result<(), String> {
+pub(crate) fn run_platformer(config: CliConfig, mode: RunMode) -> Result<(), String> {
     #[cfg(feature = "render")]
     if config.render || config.render_physics {
         return run_platformer_render(config, mode);
@@ -635,7 +630,7 @@ impl Policy<TicTacToe> for HumanTicTacToe {
         _game: &TicTacToe,
         _state: &<TicTacToe as Game>::State,
         _player: usize,
-        _observation: &<TicTacToe as Game>::PlayerObservation,
+        _observation: &<TicTacToe as Game>::Obs,
         legal_actions: &[<TicTacToe as Game>::Action],
         _rng: &mut crate::DeterministicRng,
     ) -> <TicTacToe as Game>::Action {
@@ -660,7 +655,7 @@ impl Policy<Blackjack> for HumanBlackjack {
         _game: &Blackjack,
         _state: &<Blackjack as Game>::State,
         _player: usize,
-        _observation: &<Blackjack as Game>::PlayerObservation,
+        _observation: &<Blackjack as Game>::Obs,
         legal_actions: &[<Blackjack as Game>::Action],
         _rng: &mut crate::DeterministicRng,
     ) -> <Blackjack as Game>::Action {
@@ -692,7 +687,7 @@ impl Policy<Platformer> for HumanPlatformer {
         _game: &Platformer,
         _state: &<Platformer as Game>::State,
         _player: usize,
-        _observation: &<Platformer as Game>::PlayerObservation,
+        _observation: &<Platformer as Game>::Obs,
         legal_actions: &[<Platformer as Game>::Action],
         _rng: &mut crate::DeterministicRng,
     ) -> <Platformer as Game>::Action {

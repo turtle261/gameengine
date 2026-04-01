@@ -193,8 +193,8 @@ pub trait OraclePresenter<G: Game>: Presenter<G> {}
 #[derive(Debug)]
 pub(crate) struct ViewCache<G: Game> {
     tick: Tick,
-    player_observation: G::PlayerObservation,
-    spectator_observation: G::SpectatorObservation,
+    player_observation: G::Obs,
+    spectator_observation: G::Obs,
     world_view: G::WorldView,
     previous_world_view: Option<G::WorldView>,
     last_outcome: Option<StepOutcome<G::RewardBuf>>,
@@ -254,12 +254,12 @@ impl<'a, G: Game> RenderGameView<'a, G> {
     }
 
     /// Returns player-local observation.
-    pub fn player_observation(&self) -> &G::PlayerObservation {
+    pub fn player_observation(&self) -> &G::Obs {
         &self.cache.player_observation
     }
 
     /// Returns spectator observation.
-    pub fn spectator_observation(&self) -> &G::SpectatorObservation {
+    pub fn spectator_observation(&self) -> &G::Obs {
         &self.cache.spectator_observation
     }
 
@@ -1485,10 +1485,10 @@ mod tests {
     }
 
     impl Game for CounterGame {
+        type Params = ();
         type State = CounterState;
         type Action = u8;
-        type PlayerObservation = CounterState;
-        type SpectatorObservation = CounterState;
+        type Obs = CounterState;
         type WorldView = CounterState;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 2>;
@@ -1504,7 +1504,7 @@ mod tests {
             1
         }
 
-        fn init(&self, _seed: Seed) -> Self::State {
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
             CounterState::default()
         }
 
@@ -1530,15 +1530,11 @@ mod tests {
             out.push(1).unwrap();
         }
 
-        fn observe_player(
-            &self,
-            state: &Self::State,
-            _player: PlayerId,
-        ) -> Self::PlayerObservation {
+        fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::Obs {
             *state
         }
 
-        fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
+        fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
             *state
         }
 

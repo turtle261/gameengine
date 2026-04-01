@@ -1,17 +1,5 @@
 //! Static registry describing builtin games and policy metadata.
 
-/// Statically known builtin game kind.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum GameKind {
-    /// Deterministic tic-tac-toe.
-    TicTacToe,
-    /// Deterministic blackjack.
-    Blackjack,
-    /// Deterministic physics-backed platformer.
-    #[cfg(feature = "physics")]
-    Platformer,
-}
-
 /// Policy metadata surfaced by CLI and UI.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct PolicyDescriptor {
@@ -29,12 +17,13 @@ pub struct ControlMap {
 }
 
 /// Full static descriptor for one builtin game.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct GameDescriptor {
-    /// Internal game discriminator.
-    pub kind: GameKind,
     /// Stable external game name.
     pub name: &'static str,
+    /// CLI runner callback used by descriptor-driven dispatch.
+    #[cfg(feature = "cli")]
+    pub(crate) runner: fn(crate::cli::CliConfig, crate::cli::RunMode) -> Result<(), String>,
     /// Optional controls metadata for interactive frontends.
     pub controls: Option<&'static ControlMap>,
     /// True when the default renderer supports this game.
@@ -81,24 +70,27 @@ pub fn all_games() -> &'static [GameDescriptor] {
     {
         static GAMES: [GameDescriptor; 3] = [
             GameDescriptor {
-                kind: GameKind::TicTacToe,
                 name: "tictactoe",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_tictactoe,
                 controls: Some(&TICTACTOE_CONTROLS),
                 default_renderer: cfg!(feature = "render"),
                 physics_renderer: false,
                 policies: &STANDARD_POLICIES,
             },
             GameDescriptor {
-                kind: GameKind::Blackjack,
                 name: "blackjack",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_blackjack,
                 controls: Some(&BLACKJACK_CONTROLS),
                 default_renderer: cfg!(feature = "render"),
                 physics_renderer: false,
                 policies: &STANDARD_POLICIES,
             },
             GameDescriptor {
-                kind: GameKind::Platformer,
                 name: "platformer",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_platformer,
                 controls: Some(&PLATFORMER_CONTROLS),
                 default_renderer: cfg!(feature = "render"),
                 physics_renderer: cfg!(feature = "render"),
@@ -112,16 +104,18 @@ pub fn all_games() -> &'static [GameDescriptor] {
     {
         static GAMES: [GameDescriptor; 2] = [
             GameDescriptor {
-                kind: GameKind::TicTacToe,
                 name: "tictactoe",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_tictactoe,
                 controls: Some(&TICTACTOE_CONTROLS),
                 default_renderer: cfg!(feature = "render"),
                 physics_renderer: false,
                 policies: &STANDARD_POLICIES,
             },
             GameDescriptor {
-                kind: GameKind::Blackjack,
                 name: "blackjack",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_blackjack,
                 controls: Some(&BLACKJACK_CONTROLS),
                 default_renderer: cfg!(feature = "render"),
                 physics_renderer: false,

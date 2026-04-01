@@ -90,10 +90,10 @@ mod tests {
     struct MinimalState;
 
     impl Game for MinimalGame {
+        type Params = ();
         type State = MinimalState;
         type Action = u8;
-        type PlayerObservation = u8;
-        type SpectatorObservation = u8;
+        type Obs = u8;
         type WorldView = u8;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
@@ -109,7 +109,7 @@ mod tests {
             1
         }
 
-        fn init(&self, _seed: Seed) -> Self::State {
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
             MinimalState
         }
 
@@ -132,15 +132,11 @@ mod tests {
             out.push(0).unwrap();
         }
 
-        fn observe_player(
-            &self,
-            _state: &Self::State,
-            _player: PlayerId,
-        ) -> Self::PlayerObservation {
+        fn observe_player(&self, _state: &Self::State, _player: PlayerId) -> Self::Obs {
             0
         }
 
-        fn observe_spectator(&self, _state: &Self::State) -> Self::SpectatorObservation {
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
             0
         }
 

@@ -2,15 +2,14 @@
 
 use crate::buffer::{Buffer, FixedVec};
 use crate::compact::{CompactSpec, decode_enum_action, encode_enum_action};
-use crate::core::single_player;
-use crate::game::Game;
+use crate::core::single_player::{self, SinglePlayerRewardBuf};
 use crate::math::{Aabb2, StrictF64, Vec2};
 use crate::physics::{
     BodyKind, PhysicsBody2d, PhysicsWorld2d, collect_actor_trigger_contacts,
     set_trigger_mask_deferred,
 };
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, PlayerId, PlayerReward, Reward, Seed, StepOutcome, Termination};
+use crate::types::{PlayerId, Reward, Seed, StepOutcome, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 
 const BERRY_COUNT: usize = 6;
@@ -158,6 +157,8 @@ impl PlatformerConfig {
 /// Full platformer state.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PlatformerState {
+    /// Active immutable configuration for this episode.
+    pub config: PlatformerConfig,
     /// Physics simulation world containing player and berries.
     pub world: PhysicsWorld2d<PLATFORMER_BODIES, PLATFORMER_CONTACTS>,
     /// Bitset of still-active berries.
@@ -181,7 +182,9 @@ pub struct PlatformerObservation {
 
 impl Default for PlatformerState {
     fn default() -> Self {
-        Platformer::default().init(0)
+        let game = Platformer::default();
+        let params = <Platformer as single_player::SinglePlayerGame>::default_params(&game);
+        <Platformer as single_player::SinglePlayerGame>::init_with_params(&game, 0, &params)
     }
 }
 
@@ -203,7 +206,7 @@ impl Platformer {
         state.world.require_body(PLAYER_BODY_ID)
     }
 
-    fn player_position(&self, state: &PlatformerState) -> (u8, u8) {
+    fn player_position(state: &PlatformerState) -> (u8, u8) {
         let player = Self::player_body(state);
         let min = player.aabb().min;
         let x = min.x.to_f64();
@@ -229,7 +232,7 @@ impl Platformer {
         );
     }
 
-    fn collect_berries_from_contacts(&self, state: &mut PlatformerState) -> Reward {
+    fn collect_berries_from_contacts(state: &mut PlatformerState) -> Reward {
         let was_non_terminal = state.remaining_berries != 0;
         let mut remaining = u64::from(state.remaining_berries);
         let collected = collect_actor_trigger_contacts(
@@ -241,15 +244,15 @@ impl Platformer {
         );
         state.remaining_berries = remaining as u8;
 
-        let mut reward = self.config.berry_reward * i64::from(collected);
+        let mut reward = state.config.berry_reward * i64::from(collected);
         if was_non_terminal && state.remaining_berries == 0 {
-            reward += self.config.finish_bonus;
+            reward += state.config.finish_bonus;
         }
         reward
     }
 
-    fn observation_from_state(&self, state: &PlatformerState) -> PlatformerObservation {
-        let (x, y) = self.player_position(state);
+    fn observation_from_state(state: &PlatformerState) -> PlatformerObservation {
+        let (x, y) = Self::player_position(state);
         PlatformerObservation {
             x,
             y,
@@ -259,20 +262,22 @@ impl Platformer {
         }
     }
 
-    fn build_world(&self) -> PhysicsWorld2d<PLATFORMER_BODIES, PLATFORMER_CONTACTS> {
-        let mut world = PhysicsWorld2d::new(self.config.arena_bounds());
+    fn build_world(
+        config: PlatformerConfig,
+    ) -> PhysicsWorld2d<PLATFORMER_BODIES, PLATFORMER_CONTACTS> {
+        let mut world = PhysicsWorld2d::new(config.arena_bounds());
         world.add_body_deferred(PhysicsBody2d {
             id: PLAYER_BODY_ID,
             kind: BodyKind::Kinematic,
-            position: self.config.player_center(0, 0),
-            half_extents: self.config.player_half_extents(),
+            position: config.player_center(0, 0),
+            half_extents: config.player_half_extents(),
             active: true,
         });
         for index in 0..BERRY_COUNT {
             world.add_body_deferred(PhysicsBody2d {
                 id: FIRST_BERRY_BODY_ID + index as u16,
                 kind: BodyKind::Trigger,
-                position: self.config.berry_center(index),
+                position: config.berry_center(index),
                 half_extents: Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
                 active: true,
             });
@@ -282,30 +287,28 @@ impl Platformer {
     }
 }
 
-impl Game for Platformer {
+impl single_player::SinglePlayerGame for Platformer {
+    type Params = PlatformerConfig;
     type State = PlatformerState;
     type Action = PlatformerAction;
-    type PlayerObservation = PlatformerObservation;
-    type SpectatorObservation = PlatformerObservation;
+    type Obs = PlatformerObservation;
     type WorldView = PlatformerWorldView;
-    type PlayerBuf = FixedVec<PlayerId, 1>;
     type ActionBuf = FixedVec<PlatformerAction, 4>;
-    type JointActionBuf = FixedVec<PlayerAction<PlatformerAction>, 1>;
-    type RewardBuf = FixedVec<PlayerReward, 1>;
     type WordBuf = FixedVec<u64, 1>;
+
+    fn default_params(&self) -> Self::Params {
+        self.config
+    }
 
     fn name(&self) -> &'static str {
         "platformer"
     }
 
-    fn player_count(&self) -> usize {
-        1
-    }
-
-    fn init(&self, _seed: Seed) -> Self::State {
-        assert!(self.config.invariant());
+    fn init_with_params(&self, _seed: Seed, params: &Self::Params) -> Self::State {
+        assert!(params.invariant());
         PlatformerState {
-            world: self.build_world(),
+            config: *params,
+            world: Self::build_world(*params),
             remaining_berries: ALL_BERRIES_MASK,
         }
     }
@@ -314,43 +317,34 @@ impl Game for Platformer {
         Self::is_terminal_state(state)
     }
 
-    fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
-        single_player::write_players_to_act(out, self.is_terminal(state));
-    }
-
-    fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Self::ActionBuf) {
+    fn legal_actions(&self, state: &Self::State, out: &mut Self::ActionBuf) {
         out.clear();
-        if !single_player::can_act(player, self.is_terminal(state)) {
+        if self.is_terminal(state) {
             return;
         }
         out.extend_from_slice(&PLATFORMER_ACTION_ORDER).unwrap();
     }
 
-    fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::PlayerObservation {
-        self.observation_from_state(state)
-    }
-
-    fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
-        self.observation_from_state(state)
+    fn observe_player(&self, state: &Self::State) -> Self::Obs {
+        Self::observation_from_state(state)
     }
 
     fn world_view(&self, state: &Self::State) -> Self::WorldView {
         PlatformerWorldView {
-            config: self.config,
+            config: state.config,
             physics: state.world.clone(),
-            berries: berry_views(self.config, state.remaining_berries),
+            berries: berry_views(state.config, state.remaining_berries),
         }
     }
 
     fn step_in_place(
         &self,
         state: &mut Self::State,
-        joint_actions: &Self::JointActionBuf,
+        action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<Self::RewardBuf>,
+        out: &mut StepOutcome<SinglePlayerRewardBuf>,
     ) {
-        let action =
-            single_player::first_action(joint_actions.as_slice()).unwrap_or(PlatformerAction::Stay);
+        let action = action.unwrap_or(PlatformerAction::Stay);
 
         let mut reward = 0;
         if self.is_terminal(state) {
@@ -358,12 +352,13 @@ impl Game for Platformer {
                 winner: Self::winner(state),
             };
         } else {
-            let (current_x, _) = self.player_position(state);
+            let config = state.config;
+            let (current_x, _) = Self::player_position(state);
             let (x, y) = match action {
                 PlatformerAction::Stay => (current_x, 0),
                 PlatformerAction::Left => (current_x.saturating_sub(1), 0),
                 PlatformerAction::Right => (
-                    if current_x + self.config.player_width < self.config.width {
+                    if current_x + config.player_width < config.width {
                         current_x + 1
                     } else {
                         current_x
@@ -371,21 +366,18 @@ impl Game for Platformer {
                     0,
                 ),
                 PlatformerAction::Jump => {
-                    if rng.gen_bool_ratio(
-                        self.config.sprain_numerator,
-                        self.config.sprain_denominator,
-                    ) {
+                    if rng.gen_bool_ratio(config.sprain_numerator, config.sprain_denominator) {
                         reward -= 1;
                     }
-                    (current_x, self.config.jump_delta)
+                    (current_x, config.jump_delta)
                 }
             };
 
             state
                 .world
-                .set_body_position_deferred(PLAYER_BODY_ID, self.config.player_center(x, y));
+                .set_body_position_deferred(PLAYER_BODY_ID, config.player_center(x, y));
             state.world.refresh_contacts();
-            reward += self.collect_berries_from_contacts(state);
+            reward += Self::collect_berries_from_contacts(state);
             self.sync_berries(state);
             state.world.step();
 
@@ -402,7 +394,7 @@ impl Game for Platformer {
     }
 
     fn state_invariant(&self, state: &Self::State) -> bool {
-        if !self.config.invariant()
+        if !state.config.invariant()
             || state.remaining_berries & !ALL_BERRIES_MASK != 0
             || !state.world.invariant()
             || state.world.bodies.len() != PLATFORMER_BODIES
@@ -413,13 +405,13 @@ impl Game for Platformer {
         let player = Self::player_body(state);
         if player.kind != BodyKind::Kinematic
             || !player.active
-            || player.half_extents != self.config.player_half_extents()
+            || player.half_extents != state.config.player_half_extents()
         {
             return false;
         }
 
-        let (x, y) = self.player_position(state);
-        if x + self.config.player_width > self.config.width || y > self.config.jump_delta {
+        let (x, y) = Self::player_position(state);
+        if x + state.config.player_width > state.config.width || y > state.config.jump_delta {
             return false;
         }
 
@@ -427,7 +419,7 @@ impl Game for Platformer {
             let berry = state.world.require_body(FIRST_BERRY_BODY_ID + index as u16);
             let expected_active = state.remaining_berries & (1u8 << index) != 0;
             if berry.kind != BodyKind::Trigger
-                || berry.position != self.config.berry_center(index)
+                || berry.position != state.config.berry_center(index)
                 || berry.active != expected_active
             {
                 return false;
@@ -437,25 +429,20 @@ impl Game for Platformer {
         true
     }
 
-    fn player_observation_invariant(
-        &self,
-        state: &Self::State,
-        _player: PlayerId,
-        observation: &Self::PlayerObservation,
-    ) -> bool {
-        observation == &self.observation_from_state(state)
+    fn player_observation_invariant(&self, state: &Self::State, observation: &Self::Obs) -> bool {
+        observation == &Self::observation_from_state(state)
     }
 
     fn spectator_observation_invariant(
         &self,
         state: &Self::State,
-        observation: &Self::SpectatorObservation,
+        observation: &Self::Obs,
     ) -> bool {
-        observation == &self.observation_from_state(state)
+        observation == &Self::observation_from_state(state)
     }
 
     fn world_view_invariant(&self, state: &Self::State, world: &Self::WorldView) -> bool {
-        if world.config != self.config || world.physics != state.world {
+        if world.config != state.config || world.physics != state.world {
             return false;
         }
 
@@ -463,8 +450,8 @@ impl Game for Platformer {
         while index < world.berries.len() {
             let berry = world.berries[index];
             if berry.id != FIRST_BERRY_BODY_ID + index as u16
-                || berry.x != self.config.berry_xs[index]
-                || berry.y != self.config.berry_y
+                || berry.x != state.config.berry_xs[index]
+                || berry.y != state.config.berry_y
                 || berry.collected != ((state.remaining_berries & (1u8 << index)) == 0)
             {
                 return false;
@@ -478,9 +465,9 @@ impl Game for Platformer {
     fn transition_postcondition(
         &self,
         _pre: &Self::State,
-        _actions: &Self::JointActionBuf,
+        _action: Option<Self::Action>,
         post: &Self::State,
-        outcome: &StepOutcome<Self::RewardBuf>,
+        outcome: &StepOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         reward_and_terminal_postcondition(
             outcome.reward_for(0),
@@ -511,25 +498,13 @@ impl Game for Platformer {
         decode_enum_action(encoded, &PLATFORMER_ACTION_ORDER)
     }
 
-    fn encode_player_observation(
-        &self,
-        observation: &Self::PlayerObservation,
-        out: &mut Self::WordBuf,
-    ) {
+    fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         out.clear();
         let packed = u64::from(observation.x)
             | (u64::from(observation.y) << 4)
             | (u64::from(observation.remaining_berries) << 5)
             | ((observation.terminal as u64) << 11);
         out.push(packed).unwrap();
-    }
-
-    fn encode_spectator_observation(
-        &self,
-        observation: &Self::SpectatorObservation,
-        out: &mut Self::WordBuf,
-    ) {
-        self.encode_player_observation(observation, out);
     }
 }
 

@@ -1,7 +1,5 @@
 //! Observation adapter trait and viewpoint selection types.
 
-use core::fmt::Debug;
-
 use crate::game::Game;
 use crate::types::PlayerId;
 
@@ -16,9 +14,6 @@ pub enum Observer {
 
 /// Adapter trait for producing and encoding generic observations.
 pub trait Observe: Game {
-    /// Observation type emitted by this adapter.
-    type Obs: Clone + Debug + Default + Eq + PartialEq;
-
     /// Builds an observation for the selected viewpoint.
     fn observe(&self, state: &Self::State, who: Observer) -> Self::Obs;
 
@@ -45,10 +40,8 @@ pub trait Observe: Game {
 
 impl<G> Observe for G
 where
-    G: Game<SpectatorObservation = <G as Game>::PlayerObservation>,
+    G: Game,
 {
-    type Obs = G::PlayerObservation;
-
     fn observe(&self, state: &Self::State, who: Observer) -> Self::Obs {
         match who {
             Observer::Player(player) => self.observe_player(state, player),

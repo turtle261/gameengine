@@ -28,6 +28,7 @@ pub mod verification;
 
 pub use buffer::{BitWords, Buffer, CapacityError, FixedVec};
 pub use compact::CompactSpec;
+pub use core::single_player::SinglePlayerGame;
 pub use game::Game;
 pub use policy::{FirstLegalPolicy, FnPolicy, Policy, RandomPolicy, ScriptedPolicy};
 pub use rng::{DeterministicRng, SplitMix64};

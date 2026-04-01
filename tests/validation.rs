@@ -5,13 +5,15 @@ use std::cell::Cell;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(feature = "parallel")]
+use gameengine::InteractiveSession;
 use gameengine::buffer::Buffer;
 use gameengine::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 #[cfg(feature = "physics")]
 use gameengine::builtin::{Platformer, PlatformerAction};
 use gameengine::{
-    CompactSpec, DeterministicRng, FixedVec, Game, InteractiveSession, PlayerAction, PlayerReward,
-    Session, StepOutcome, stable_hash,
+    CompactSpec, DeterministicRng, FixedVec, Game, PlayerAction, PlayerReward, Session,
+    StepOutcome, stable_hash,
 };
 
 struct CountingAllocator;
@@ -278,7 +280,7 @@ fn golden_compact_traces_match_expected_values() {
         compact,
         vec![vec![8193], vec![139521], vec![141573], vec![141589]]
     );
-    assert_eq!(trace_hash, 0xfcb1_5a37_9487_30e3);
+    assert_eq!(trace_hash, 0x5b96_1efc_b075_3027);
 
     let blackjack_actions = vec![vec![PlayerAction {
         player: 0,
@@ -286,7 +288,7 @@ fn golden_compact_traces_match_expected_values() {
     }]];
     let (compact, trace_hash, _) = capture_compact_trace(Blackjack, 11, &blackjack_actions);
     assert_eq!(compact, vec![vec![140693832466, 1449, 132, 0]]);
-    assert_eq!(trace_hash, 0xd6d3_8ce4_845f_4206);
+    assert_eq!(trace_hash, 0xfb29_3f00_ff61_bdc7);
 
     #[cfg(feature = "physics")]
     let platformer_actions = vec![
@@ -385,7 +387,7 @@ fn golden_compact_traces_match_expected_values() {
                 vec![2075],
             ]
         );
-        assert_eq!(trace_hash, 0x1788_afb3_0dcd_0d2e);
+        assert_eq!(trace_hash, 0x1ee7_fb2e_3689_eabf);
     }
 }
 

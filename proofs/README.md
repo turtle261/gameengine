@@ -18,6 +18,12 @@ Run Verus model checks directly:
 bash scripts/run-verus.sh
 ```
 
+Pin and auto-fetch the exact Verus release used by CI:
+
+```bash
+AUTO_FETCH_VERUS=1 REQUIRE_VERUS=1 bash scripts/run-verus.sh
+```
+
 The unified script runs tests, checks, clippy, bench compilation, Kani harnesses, and Verus model checks across three verified layers:
 
 - the default headless kernel,
@@ -42,8 +48,10 @@ See [`proofs/claim.md`](claim.md) for a precise verified vs tested vs out-of-sco
 - Game-specific properties in the builtin game modules when `builtin` is enabled
 - Physics invariants for the engine-owned 2D world and the platformer environment when
   `builtin` and `physics` are enabled
-- Render-input safety claims now include observation decoding and scene-order normalization checks;
-  final GPU backend execution remains outside full formal proof scope
+- Verus model lemmas in [`proofs/verus/session_refinement.rs`](verus/session_refinement.rs)
+  for replay fold refinement and canonical observation-schema constraints
+- Render/input/runtime behavior is covered by tests and benchmarks; it is not currently
+  claimed as fully formally verified
 
 ## Verification Pattern For New Games
 

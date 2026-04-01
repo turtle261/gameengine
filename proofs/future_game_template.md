@@ -9,7 +9,7 @@ world view, compact codec, and physics hooks belong in the verification checklis
 
 ## Runtime Checklist
 
-- Add a deterministic smoke test from `init(seed)` through a fixed action trace.
+- Add a deterministic smoke test from `init_with_params(seed, &params)` through a fixed action trace.
 - Add a replay equivalence test using `Session::state_at`, `rewind_to`, and `fork_at`.
 - Add a no-allocation hot-path test for direct `step_in_place`.
 - Add compact codec round-trip tests for the game action/observation codec hooks.
@@ -25,6 +25,8 @@ Implement and document:
 - `world_view_invariant`
 - `transition_postcondition`
 
+For single-player games, prefer implementing `core::single_player::SinglePlayerGame` and let the engine provide the `Game` adapter wiring.
+
 ## Kani Harness Skeleton
 
 ```rust
@@ -37,7 +39,7 @@ mod proofs {
     #[kani::proof]
     fn transition_contract_holds_for_representative_step() {
         let game = MyGame::default();
-        let state = game.init(1);
+        let state = game.init_with_params(1, &game.default_params());
         let mut actions = FixedVec::<PlayerAction<MyAction>, 1>::default();
         actions.push(PlayerAction { player: 0, action: MyAction::Default }).unwrap();
         crate::verification::assert_transition_contracts(&game, &state, &actions, 1);
@@ -46,7 +48,7 @@ mod proofs {
     #[kani::proof]
     fn observation_contract_holds_for_initial_state() {
         let game = MyGame::default();
-        let state = game.init(1);
+        let state = game.init_with_params(1, &game.default_params());
         crate::verification::assert_observation_contracts(&game, &state);
     }
 

@@ -1,6 +1,8 @@
 use super::*;
+use crate::game::Game;
 use crate::policy::{FirstLegalPolicy, RandomPolicy};
 use crate::session::Session;
+use crate::types::PlayerAction;
 use crate::verification::{
     assert_compact_roundtrip, assert_observation_contracts, assert_transition_contracts,
 };

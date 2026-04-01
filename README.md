@@ -1,113 +1,172 @@
 # Infotheory Game Engine
 
-`gameengine` is a deterministic, replayable, proof-oriented environment kernel.
+`gameengine` is a deterministic, replayable, proof-oriented game/simulation kernel for games treated as mathematical objects.
 
-The engine is organized so game authors focus on game mathematics first:
+The kernel is designed around:
 
-`(seed, state, joint_actions) -> (new_state, reward, canonical observation bits, termination)`
+`(seed, state, joint_actions) -> (new_state, reward, observations, termination)`
 
-Everything else (session/replay, compact codecs, registry/CLI wiring, proof helpers,
-physics/render integration) is engine-owned and reusable.
+Everything else is layered on top:
 
-## Rewrite Architecture
+- rendering is a derived view,
+- human pacing is a presentation concern,
+- networking is a transport concern,
+- machine control is just another action source,
+- replay and rollback are exact because the kernel is deterministic.
 
-The crate remains a single artifact and is library-first by default.
+## What It Is For
 
-- `src/lib.rs`
-  - canonical public API and feature-gated exports
-- `src/core/`
-  - core deterministic interfaces and wrappers
-  - canonical observation trait (`Observe` + `Observer`)
-  - infotheory-ready environment wrapper (`Environment`, `EnvStep`, `BitPacket`)
-  - explicit fast vs checked stepper wrappers
-- `src/proof/`
-  - proof-facing helper surface and claim document wiring
-- `src/physics.rs`
-  - deterministic physics world + contact generation
-  - hybrid broadphase: tiny-world fast path + scalable sweep-and-prune path
-- `src/render/`
-  - optional retained-mode renderer
-  - hot path updated to avoid per-frame cache/scene cloning where possible
-- `src/builtin/`
-  - builtin implementation namespace
-  - concrete game implementations under `src/builtin/tictactoe/`, `src/builtin/blackjack/`, and `src/builtin/platformer/`
-- `src/registry/`
-  - static game descriptor registry used by the CLI
-- `src/cli/`
-  - optional registry-backed CLI integration
-- `src/bin/gameengine.rs`
-  - binary entrypoint (feature-gated)
+This crate is meant for:
 
-## Canonical Observation + Env Surface
+- deterministic game development,
+- AIT and AI experiments,
+- simulation-heavy search workloads such as MCTS,
+- scientific or benchmark environments that need replay fidelity,
+- games that benefit from formal reasoning about correctness,
+- simulated physical environments.
 
-The rewrite introduces a single canonical observation surface for consumers:
+The target audience is broader than traditional game development: computer scientists, mathematicians, ML/AI researchers, and anyone who needs portable, auditable, replayable environments.
 
-- `core::observe::Observe`
-  - one observation schema type per game (`type Obs`)
-  - observer-aware extraction (`Observer::Player`, `Observer::Spectator`)
-  - canonical compact encoding
-- `core::env::Environment`
-  - `reset(seed)`
-  - `step(action_bits)`
-  - returns `EnvStep { observation_bits, reward, terminated, truncated }`
+## Design Principles
 
-This is designed to map directly to infotheory-style environment loops.
+- Headless by default. The mathematical kernel is the source of truth.
+- Deterministic seeded PRNG only. No wall-clock time inside the game core.
+- Tick-based simulation. Rendering speed and simulation speed are decoupled.
+- Fixed-capacity buffers in the proof-critical path. Hot stepping stays allocation-free.
+- Replay, rewind, and fork are first-class.
+- Physics is engine-owned, auditable, and deterministic.
+- Rendering is additive. A UI cannot change game semantics.
+- One canonical observation type per game (`type Obs`), with player/spectator viewpoints encoded from that shared schema.
 
-## Feature Graph
+## Authoring Ergonomics
 
-- `default = []`
-  - minimal headless library
-- `proof`
-  - proof helper surface exports
-- `physics`
-  - deterministic 2D physics
-- `builtin`
-  - builtin reference environments
-- `cli`
-  - command-line frontend (`gameengine` binary), depends on `builtin`
-- `parallel`
-  - parallel replay helpers
-- `render`
-  - optional retained-mode renderer/runtime
+The core `Game` trait remains available for full control, but single-player environments now have an ergonomic adapter:
 
-## Verification
+- `core::single_player::SinglePlayerGame`
 
-Run the unified verification workflow:
+It removes repeated single-player plumbing:
+
+- no manual `player_count = 1` wiring,
+- no manual `players_to_act` wiring,
+- no manual joint-action extraction boilerplate,
+- canonical fixed-capacity reward/joint-action buffer wiring is engine-owned.
+
+This is the intended path for Pong-class ports where the handwritten core should stay close to game math.
+
+Minimal compileable example:
+
+```bash
+cargo run --example pong_core
+```
+
+## Environment Interface
+
+`core::env::Environment` exposes an infotheory-compatible compact interface:
+
+- `reset(seed)`
+- `reset_with_params(seed, params)`
+- `step(action_bits) -> EnvStep { observation_bits, reward, terminated, truncated }`
+
+Compact constraints are canonical and centralized in `CompactSpec`:
+
+- observation word count/bit-width validation,
+- reward range validation,
+- reward bit-width validation.
+
+## Formal Verification Scope
+
+The core engine and builtin reference environments are set up for Kani and Verus checks.
+
+Current proof surface includes:
+
+- fixed-capacity buffers,
+- compact codec constraints and roundtrip properties,
+- PRNG determinism,
+- rollback/replay restoration properties,
+- builtin game invariants in the harness matrix,
+- engine-owned 2D physics invariants,
+- Verus replay/observation refinement models.
+
+Render/runtime behavior is validated by tests and benchmarks; the GPU/driver stack is intentionally outside full formal proof scope.
+
+Run the integrated verification matrix with:
 
 ```bash
 bash scripts/run-verification.sh
 ```
 
-This script runs:
-
-- test/check matrix across core feature combinations,
-- clippy (`-D warnings`),
-- benchmark compilation,
-- Kani harness matrix (when `cargo-kani` is installed),
-- Verus model checks (when `verus` is installed).
-
-## Performance Tooling
-
-Benchmarks:
+Run Verus checks directly:
 
 ```bash
-cargo bench --bench step_throughput --features "builtin physics"
-cargo bench --bench kernel_hotpaths --features "builtin physics"
+bash scripts/run-verus.sh
 ```
 
-Perf profiling (Linux):
+Pin and auto-fetch the CI Verus binary:
 
 ```bash
-bash scripts/run-perf.sh platformer 3000000
+AUTO_FETCH_VERUS=1 REQUIRE_VERUS=1 bash scripts/run-verus.sh
 ```
 
-The perf probe targets release-mode stepping loops without Criterion analysis overhead,
-so hotspot attribution is meaningful.
+## Feature Graph
+
+- `default = []`
+  - minimal headless kernel
+- `proof`
+  - proof helper exports
+- `physics`
+  - engine-owned deterministic 2D physics
+- `builtin`
+  - builtin reference environments
+- `cli`
+  - command-line binary (`gameengine`), depends on `builtin`
+- `parallel`
+  - batch simulation helpers for independent runs
+- `render`
+  - additive render/runtime layer
+
+Recommended combinations:
+
+```bash
+# headless kernel only
+cargo test
+
+# builtin reference environments
+cargo test --features builtin
+
+# builtin games plus physics
+cargo test --features "builtin physics"
+
+# playable/rendered reference environments
+cargo test --features "render builtin physics"
+```
+
+## Builtin Reference Games
+
+- `TicTacToe`
+- `Blackjack`
+- `Platformer`
+
+These are reference environments, not privileged engine special-cases. They demonstrate deterministic game authoring, proof hooks, compact encoding, and render adapters.
+
+## Rendering Model
+
+The render layer is wrapper-first, not kernel-first.
+
+- `--render`: intended player observation/UI path
+- `--render-physics`: oracle/developer view of the physics environment
+
+The oracle path can reveal information the player should not see. It exists for debugging, teaching, and diagnostics.
+
+Because the kernel is tick-based, the same game can be:
+
+- trained at compute speed,
+- replayed exactly,
+- slowed for human-readable pacing,
+- or rendered live with AI-driven actions.
 
 ## CLI
 
-The CLI is registry-backed: game listing and dispatch come from `src/registry/mod.rs`.
-Adding a game now requires a descriptor registration rather than editing multiple match sites.
+The CLI is available when `cli` is enabled.
 
 ```bash
 cargo run --features cli -- list
@@ -117,16 +176,42 @@ cargo run --features "cli physics render" -- play platformer --render
 cargo run --features "cli physics render" -- play platformer --render-physics --debug-overlay
 ```
 
-## Proof Claim Scope
+Useful flags:
 
-Proof claim details live in:
+- `--seed <u64>`
+- `--max-steps <usize>`
+- `--policy human|random|first|script:...`
+- `--render`
+- `--render-physics`
+- `--ticks-per-second <f64>`
+- `--no-vsync`
+- `--debug-overlay`
 
-- `proofs/README.md`
+## Rollback And Replay
 
-Current claim includes deterministic kernel contracts, compact codec properties,
-replay/rewind restoration, and physics invariants for supported feature sets.
-GPU backend execution remains outside full formal proof scope.
+`SessionKernel`, `DynamicHistory`, and `FixedHistory` support:
+
+- exact trace recording,
+- `rewind_to(tick)`,
+- `replay_to(tick)`,
+- `state_at(tick)`,
+- `fork_at(tick)`.
+
+This supports rollback netcode, deterministic multiplayer simulation, offline search, and reproducible experiments.
+
+## WASM
+
+The core library is WASM-compatible. The headless kernel remains portable, and the render stack is structured to compile for WebAssembly.
+
+## Project Direction
+
+The kernel is intentionally shaped to be compatible with Infotheory AIXI interfaces:
+
+- compact `u64` actions/observations,
+- `i64` rewards,
+- deterministic seeded execution,
+- replayable transitions.
 
 ## License
 
-ISC.
+This project uses the ISC License (see `LICENSE`).

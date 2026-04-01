@@ -356,6 +356,7 @@ where
 #[derive(Clone, Debug)]
 pub struct SessionKernel<G: Game, H: HistoryStore<G>> {
     game: G,
+    params: G::Params,
     state: G::State,
     rng: DeterministicRng,
     tick: Tick,
@@ -366,20 +367,27 @@ pub struct SessionKernel<G: Game, H: HistoryStore<G>> {
     outcome: StepOutcome<G::RewardBuf>,
 }
 
-/// Default fixed-history session alias.
-pub type Session<G> = SessionKernel<G, FixedHistory<G, 256, 32, 8>>;
+/// Default dynamic-history session alias.
+pub type Session<G> = SessionKernel<G, DynamicHistory<G, 512, 8>>;
 /// Interactive dynamic-history session alias.
 pub type InteractiveSession<G> = SessionKernel<G, DynamicHistory<G, 128, 8>>;
 
 impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     /// Creates a new session initialized from `seed`.
     pub fn new(game: G, seed: Seed) -> Self {
-        let state = game.init(seed);
+        let params = game.default_params();
+        Self::new_with_params(game, seed, params)
+    }
+
+    /// Creates a new session initialized from `seed` and explicit params.
+    pub fn new_with_params(game: G, seed: Seed, params: G::Params) -> Self {
+        let state = game.init_with_params(seed, &params);
         assert!(game.state_invariant(&state));
         let rng = DeterministicRng::from_seed_and_stream(seed, 1);
         let history = H::from_seed(seed, &state, rng);
         Self {
             game,
+            params,
             state,
             rng,
             tick: 0,
@@ -393,7 +401,14 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
 
     /// Resets session state and history to `seed`.
     pub fn reset(&mut self, seed: Seed) {
-        self.state = self.game.init(seed);
+        let params = self.params.clone();
+        self.reset_with_params(seed, params);
+    }
+
+    /// Resets session state/history to `seed` and updates active params.
+    pub fn reset_with_params(&mut self, seed: Seed, params: G::Params) {
+        self.params = params;
+        self.state = self.game.init_with_params(seed, &self.params);
         self.rng = DeterministicRng::from_seed_and_stream(seed, 1);
         self.tick = 0;
         self.history.reset(seed, &self.state, self.rng);
@@ -406,6 +421,11 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     /// Returns the game instance.
     pub fn game(&self) -> &G {
         &self.game
+    }
+
+    /// Returns active parameter bundle used by resets and initial state creation.
+    pub fn params(&self) -> &G::Params {
+        &self.params
     }
 
     /// Returns current game state.
@@ -439,12 +459,12 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     }
 
     /// Returns player-local observation.
-    pub fn player_observation(&self, player: usize) -> G::PlayerObservation {
+    pub fn player_observation(&self, player: usize) -> G::Obs {
         self.game.observe_player(&self.state, player)
     }
 
     /// Returns spectator observation.
-    pub fn spectator_observation(&self) -> G::SpectatorObservation {
+    pub fn spectator_observation(&self) -> G::Obs {
         self.game.observe_spectator(&self.state)
     }
 
@@ -750,10 +770,10 @@ mod tests {
     }
 
     impl Game for SpinnerGame {
+        type Params = ();
         type State = SpinnerState;
         type Action = u8;
-        type PlayerObservation = SpinnerState;
-        type SpectatorObservation = SpinnerState;
+        type Obs = SpinnerState;
         type WorldView = SpinnerState;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
@@ -769,7 +789,7 @@ mod tests {
             1
         }
 
-        fn init(&self, _seed: Seed) -> Self::State {
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
             SpinnerState { tick: 0 }
         }
 
@@ -792,15 +812,11 @@ mod tests {
             out.push(0).unwrap();
         }
 
-        fn observe_player(
-            &self,
-            state: &Self::State,
-            _player: PlayerId,
-        ) -> Self::PlayerObservation {
+        fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::Obs {
             *state
         }
 
-        fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
+        fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
             *state
         }
 
@@ -866,10 +882,10 @@ mod proofs {
     }
 
     impl Game for CounterGame {
+        type Params = ();
         type State = CounterState;
         type Action = u8;
-        type PlayerObservation = CounterState;
-        type SpectatorObservation = CounterState;
+        type Obs = CounterState;
         type WorldView = CounterState;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 2>;
@@ -885,7 +901,7 @@ mod proofs {
             1
         }
 
-        fn init(&self, _seed: Seed) -> Self::State {
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {
             CounterState {
                 value: 0,
                 terminal: false,
@@ -914,15 +930,11 @@ mod proofs {
             out.push(1).unwrap();
         }
 
-        fn observe_player(
-            &self,
-            state: &Self::State,
-            _player: PlayerId,
-        ) -> Self::PlayerObservation {
+        fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::Obs {
             *state
         }
 
-        fn observe_spectator(&self, state: &Self::State) -> Self::SpectatorObservation {
+        fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
             *state
         }
 

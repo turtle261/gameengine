@@ -11,7 +11,11 @@ COMMON_HARNESSES=(
   bit_words_round_trip
   fixed_vec_push_preserves_prefix_order
   compact_reward_round_trip
+  compact_observation_words_match_schema
+  compact_reward_bit_width_is_enforced
   step_outcome_reward_lookup_defaults_to_zero
+  env_rejects_invalid_observation_words
+  env_rejects_reward_encoding_that_exceeds_bit_width
   replay_trace_records_steps
   rng_state_sanitization_is_total
   seeded_stream_constructor_handles_reference_cases
