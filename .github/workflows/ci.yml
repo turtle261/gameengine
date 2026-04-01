@@ -81,7 +81,7 @@ jobs:
           curl -fsSL "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.03.28.3390e9a/verus-0.2026.03.28.3390e9a-x86-linux.zip" -o /tmp/verus.zip
           unzip -q /tmp/verus.zip -d /tmp
           rm -rf ./verus_binary
-          mv /tmp/verus_x86_64 ./verus_binary
+          mv /tmp/verus-x86-linux ./verus_binary
           chmod +x ./verus_binary/verus
 
       - name: Verus model checks
