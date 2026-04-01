@@ -127,7 +127,7 @@ where
             && point.y <= self.max.y
     }
 
-            /// Returns whether this AABB intersects `other`.
+    /// Returns whether this AABB intersects `other`.
     pub fn intersects(&self, other: &Self) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x
@@ -164,7 +164,7 @@ where
             && point.z <= self.max.z
     }
 
-            /// Returns whether this AABB intersects `other`.
+    /// Returns whether this AABB intersects `other`.
     pub fn intersects(&self, other: &Self) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x

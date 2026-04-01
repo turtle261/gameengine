@@ -479,10 +479,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             .record(self.tick, &self.state, self.rng, actions, &self.outcome);
     }
 
-    fn collect_policy_actions(
-        &mut self,
-        policies: &mut [&mut dyn Policy<G>],
-    ) {
+    fn collect_policy_actions(&mut self, policies: &mut [&mut dyn Policy<G>]) {
         self.players_to_act.clear();
         self.game
             .players_to_act(&self.state, &mut self.players_to_act);

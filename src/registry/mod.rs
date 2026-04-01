@@ -134,5 +134,7 @@ pub fn all_games() -> &'static [GameDescriptor] {
 
 /// Finds a builtin game descriptor by stable name.
 pub fn find_game(name: &str) -> Option<&'static GameDescriptor> {
-    all_games().iter().find(|descriptor| descriptor.name == name)
+    all_games()
+        .iter()
+        .find(|descriptor| descriptor.name == name)
 }

@@ -1,8 +1,8 @@
 //! Platformer world/debug view types and physics oracle adapter.
 
+use crate::game::Game;
 use crate::math::{Aabb2, StrictF64};
 use crate::physics::{Contact2d, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d};
-use crate::game::Game;
 
 use super::{
     BERRY_COUNT, FIRST_BERRY_BODY_ID, PLATFORMER_BODIES, PLATFORMER_CONTACTS, Platformer,
@@ -33,7 +33,10 @@ pub struct PlatformerWorldView {
     pub berries: [BerryView; BERRY_COUNT],
 }
 
-pub(super) fn berry_views(config: PlatformerConfig, remaining_berries: u8) -> [BerryView; BERRY_COUNT] {
+pub(super) fn berry_views(
+    config: PlatformerConfig,
+    remaining_berries: u8,
+) -> [BerryView; BERRY_COUNT] {
     let mut berries = [BerryView::default(); BERRY_COUNT];
     let mut index = 0usize;
     while index < BERRY_COUNT {

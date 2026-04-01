@@ -5,19 +5,17 @@ use std::fmt::Debug;
 use std::io::{self, Write};
 
 use crate::buffer::Buffer;
-use crate::core::observe::{Observe, Observer};
 #[cfg(feature = "builtin")]
 use crate::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
 #[cfg(feature = "physics")]
 use crate::builtin::{Platformer, PlatformerAction};
+use crate::core::observe::{Observe, Observer};
 use crate::policy::{FirstLegalPolicy, Policy, RandomPolicy, ScriptedPolicy};
+use crate::registry::{GameKind, all_games, find_game};
+#[cfg(feature = "render")]
+use crate::render::{PassivePolicyDriver, RenderConfig, RenderMode, RendererApp, TurnBasedDriver};
 #[cfg(all(feature = "render", feature = "physics"))]
 use crate::render::{RealtimeDriver, builtin};
-#[cfg(feature = "render")]
-use crate::render::{
-    PassivePolicyDriver, RenderConfig, RenderMode, RendererApp, TurnBasedDriver,
-};
-use crate::registry::{GameKind, all_games, find_game};
 #[cfg(feature = "render")]
 use crate::session::InteractiveSession;
 use crate::{Game, Session, stable_hash};
@@ -310,7 +308,9 @@ where
         };
         let observation = session.game().observe(session.state(), Observer::Player(0));
         let mut compact = G::WordBuf::default();
-        session.game().encode_observation(&observation, &mut compact);
+        session
+            .game()
+            .encode_observation(&observation, &mut compact);
         println!(
             "tick={} reward={} terminal={} compact={:?}",
             session.current_tick(),
@@ -382,7 +382,10 @@ fn run_tictactoe_render(config: CliConfig, mode: RunMode) -> Result<(), String> 
         .map_err(|error| error.to_string()),
         PolicyChoice::Random => RendererApp::new(
             render_config,
-            PassivePolicyDriver::new(InteractiveSession::new(TicTacToe, config.seed), RandomPolicy),
+            PassivePolicyDriver::new(
+                InteractiveSession::new(TicTacToe, config.seed),
+                RandomPolicy,
+            ),
             TicTacToePresenter::default(),
         )
         .run_native()
@@ -425,7 +428,10 @@ fn run_blackjack_render(config: CliConfig, mode: RunMode) -> Result<(), String> 
         .map_err(|error| error.to_string()),
         PolicyChoice::Random => RendererApp::new(
             render_config,
-            PassivePolicyDriver::new(InteractiveSession::new(Blackjack, config.seed), RandomPolicy),
+            PassivePolicyDriver::new(
+                InteractiveSession::new(Blackjack, config.seed),
+                RandomPolicy,
+            ),
             BlackjackPresenter::default(),
         )
         .run_native()
@@ -463,13 +469,17 @@ fn run_platformer_render(config: CliConfig, mode: RunMode) -> Result<(), String>
     let render_config = build_render_config(&config, render_mode);
     let game = Platformer::default();
 
-    let policy_choice = resolve_policy_choice(mode, &config.policy, parse_platformer_script, "platformer")?;
+    let policy_choice =
+        resolve_policy_choice(mode, &config.policy, parse_platformer_script, "platformer")?;
 
     if config.render_physics {
         match policy_choice {
             PolicyChoice::Human => RendererApp::new(
                 render_config,
-                RealtimeDriver::new(InteractiveSession::new(game, config.seed), PlatformerAction::Stay),
+                RealtimeDriver::new(
+                    InteractiveSession::new(game, config.seed),
+                    PlatformerAction::Stay,
+                ),
                 builtin::PlatformerPhysicsPresenter::new(game.config),
             )
             .run_native()
@@ -506,7 +516,10 @@ fn run_platformer_render(config: CliConfig, mode: RunMode) -> Result<(), String>
         match policy_choice {
             PolicyChoice::Human => RendererApp::new(
                 render_config,
-                RealtimeDriver::new(InteractiveSession::new(game, config.seed), PlatformerAction::Stay),
+                RealtimeDriver::new(
+                    InteractiveSession::new(game, config.seed),
+                    PlatformerAction::Stay,
+                ),
                 builtin::PlatformerPresenter::default(),
             )
             .run_native()
@@ -545,7 +558,9 @@ fn run_platformer_render(config: CliConfig, mode: RunMode) -> Result<(), String>
 fn print_usage() {
     println!("usage:");
     println!("  gameengine list");
-    println!("  gameengine play <game> [--seed N] [--max-steps N] [--policy human|random|first|script:...]");
+    println!(
+        "  gameengine play <game> [--seed N] [--max-steps N] [--policy human|random|first|script:...]"
+    );
     println!("  gameengine replay <game> [--seed N] [--max-steps N] [--policy script:...]");
     println!("  gameengine validate");
     println!("available games:");

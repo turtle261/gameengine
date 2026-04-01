@@ -6,8 +6,8 @@ use crate::core::single_player;
 use crate::game::Game;
 use crate::math::{Aabb2, StrictF64, Vec2};
 use crate::physics::{
-    BodyKind, PhysicsBody2d, PhysicsWorld2d,
-    collect_actor_trigger_contacts, set_trigger_mask_deferred,
+    BodyKind, PhysicsBody2d, PhysicsWorld2d, collect_actor_trigger_contacts,
+    set_trigger_mask_deferred,
 };
 use crate::rng::DeterministicRng;
 use crate::types::{PlayerAction, PlayerId, PlayerReward, Reward, Seed, StepOutcome, Termination};
@@ -27,8 +27,8 @@ const PLATFORMER_ACTION_ORDER: [PlatformerAction; 4] = [
 ];
 
 mod world;
-pub use world::{BerryView, PlatformerWorldView};
 use world::berry_views;
+pub use world::{BerryView, PlatformerWorldView};
 
 /// Player action in the platformer world.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -482,7 +482,13 @@ impl Game for Platformer {
         post: &Self::State,
         outcome: &StepOutcome<Self::RewardBuf>,
     ) -> bool {
-        reward_and_terminal_postcondition(outcome.reward_for(0), -1, 11, post.remaining_berries == 0, outcome.is_terminal())
+        reward_and_terminal_postcondition(
+            outcome.reward_for(0),
+            -1,
+            11,
+            post.remaining_berries == 0,
+            outcome.is_terminal(),
+        )
     }
 
     fn compact_spec(&self) -> CompactSpec {

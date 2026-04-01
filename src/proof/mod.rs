@@ -20,7 +20,9 @@ pub fn assert_generated_game_surface<G: Game>(
 ) {
     assert_transition_contracts(game, state, actions, seed);
     assert_observation_contracts(game, state);
-    if let Some(first) = actions.as_slice().first() {
+    if game.compact_spec().action_count > 0
+        && let Some(first) = actions.as_slice().first()
+    {
         assert_compact_roundtrip(game, &first.action);
     }
 }

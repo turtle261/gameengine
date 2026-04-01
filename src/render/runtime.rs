@@ -1099,7 +1099,8 @@ impl GpuState {
 
         self.text_order.clear();
         self.text_order.extend(0..scene.texts.len());
-        self.text_order.sort_by_key(|&index| scene.texts[index].layer);
+        self.text_order
+            .sort_by_key(|&index| scene.texts[index].layer);
 
         for (index, text_index) in self.text_order.iter().copied().enumerate() {
             let text = &scene.texts[text_index];

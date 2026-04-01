@@ -1,16 +1,18 @@
 //! Deterministic game engine core with compact codecs, verification hooks, and render adapters.
 
 pub mod core;
-#[cfg(feature = "builtin")]
-pub mod registry;
 #[cfg(feature = "proof")]
 pub mod proof;
+#[cfg(feature = "builtin")]
+pub mod registry;
 
 pub mod buffer;
-pub mod compact;
-pub mod game;
 #[cfg(feature = "builtin")]
 pub mod builtin;
+#[cfg(feature = "cli")]
+pub mod cli;
+pub mod compact;
+pub mod game;
 pub mod math;
 #[cfg(feature = "parallel")]
 pub mod parallel;
@@ -23,8 +25,6 @@ pub mod rng;
 pub mod session;
 pub mod types;
 pub mod verification;
-#[cfg(feature = "cli")]
-pub mod cli;
 
 pub use buffer::{BitWords, Buffer, CapacityError, FixedVec};
 pub use compact::CompactSpec;

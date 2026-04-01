@@ -297,7 +297,13 @@ impl Game for TicTacToe {
         if pre.terminal {
             return post == pre && outcome.reward_for(0) == 0 && outcome.is_terminal();
         }
-        reward_and_terminal_postcondition(outcome.reward_for(0), -3, 2, post.terminal, outcome.is_terminal())
+        reward_and_terminal_postcondition(
+            outcome.reward_for(0),
+            -3,
+            2,
+            post.terminal,
+            outcome.is_terminal(),
+        )
     }
 }
 

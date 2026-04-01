@@ -12,7 +12,10 @@ pub struct BlackjackValue {
 }
 
 /// Evaluate a blackjack hand from rank values in `[1, 13]`.
-pub fn evaluate_blackjack_hand<const MAX_CARDS: usize>(cards: &[u8; MAX_CARDS], len: u8) -> BlackjackValue {
+pub fn evaluate_blackjack_hand<const MAX_CARDS: usize>(
+    cards: &[u8; MAX_CARDS],
+    len: u8,
+) -> BlackjackValue {
     let mut total = 0u8;
     let mut aces = 0u8;
     let limit = len as usize;

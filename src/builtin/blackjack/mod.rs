@@ -447,7 +447,13 @@ impl Game for Blackjack {
         post: &Self::State,
         outcome: &StepOutcome<Self::RewardBuf>,
     ) -> bool {
-        reward_and_terminal_postcondition(outcome.reward_for(0), -1, 1, post.phase == BlackjackPhase::Terminal, outcome.is_terminal())
+        reward_and_terminal_postcondition(
+            outcome.reward_for(0),
+            -1,
+            1,
+            post.phase == BlackjackPhase::Terminal,
+            outcome.is_terminal(),
+        )
     }
 
     fn compact_spec(&self) -> CompactSpec {
@@ -511,7 +517,6 @@ impl Game for Blackjack {
             out,
         );
     }
-
 }
 
 #[cfg(test)]

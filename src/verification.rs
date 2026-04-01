@@ -65,6 +65,127 @@ pub fn assert_observation_contracts<G: Game>(game: &G, state: &G::State) {
 
 /// Asserts compact action encoding roundtrips through decode.
 pub fn assert_compact_roundtrip<G: Game>(game: &G, action: &G::Action) {
+    if game.compact_spec().action_count == 0 {
+        return;
+    }
     let encoded = game.encode_action(action);
     assert_eq!(game.decode_action(encoded), Some(*action));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::assert_compact_roundtrip;
+    use crate::buffer::FixedVec;
+    use crate::compact::CompactSpec;
+    use crate::game::Game;
+    use crate::rng::DeterministicRng;
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome};
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct MinimalGame {
+        compact_actions: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct MinimalState;
+
+    impl Game for MinimalGame {
+        type State = MinimalState;
+        type Action = u8;
+        type PlayerObservation = u8;
+        type SpectatorObservation = u8;
+        type WorldView = u8;
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "minimal"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init(&self, _seed: Seed) -> Self::State {
+            MinimalState
+        }
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn observe_player(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+        ) -> Self::PlayerObservation {
+            0
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::SpectatorObservation {
+            0
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {
+            0
+        }
+
+        fn step_in_place(
+            &self,
+            _state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 0,
+                })
+                .unwrap();
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: self.compact_actions,
+                observation_bits: 0,
+                observation_stream_len: 0,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 0,
+                reward_offset: 0,
+            }
+        }
+    }
+
+    #[test]
+    fn compact_roundtrip_is_skipped_when_action_codec_is_absent() {
+        let game = MinimalGame { compact_actions: 0 };
+        assert_compact_roundtrip(&game, &0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn compact_roundtrip_still_checks_declared_codec_surface() {
+        let game = MinimalGame { compact_actions: 1 };
+        assert_compact_roundtrip(&game, &0);
+    }
 }

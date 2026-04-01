@@ -369,7 +369,9 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
             sorted_index += 1;
         }
 
-        self.contacts.as_mut_slice().sort_by_key(|contact| (contact.a, contact.b));
+        self.contacts
+            .as_mut_slice()
+            .sort_by_key(|contact| (contact.a, contact.b));
     }
 }
 
@@ -400,6 +402,10 @@ pub fn set_trigger_mask_deferred<const BODIES: usize, const CONTACTS: usize>(
     trigger_count: usize,
     active_mask: u64,
 ) {
+    assert!(
+        trigger_count <= u64::BITS as usize,
+        "trigger_count {trigger_count} exceeds 64-bit trigger mask capacity"
+    );
     let mut index = 0usize;
     while index < trigger_count {
         let active = (active_mask & (1u64 << index)) != 0;
@@ -416,6 +422,10 @@ pub fn collect_actor_trigger_contacts<const BODIES: usize, const CONTACTS: usize
     trigger_count: usize,
     remaining_mask: &mut u64,
 ) -> u8 {
+    assert!(
+        trigger_count <= u64::BITS as usize,
+        "trigger_count {trigger_count} exceeds 64-bit trigger mask capacity"
+    );
     let mut collected = 0u8;
     let mut index = 0usize;
     while index < trigger_count {

@@ -25,10 +25,21 @@ pub trait Observe: Game {
     /// Encodes an observation into the compact word stream.
     fn encode_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf);
 
+    /// Encodes an observation with explicit viewpoint context.
+    fn encode_observation_for(
+        &self,
+        who: Observer,
+        observation: &Self::Obs,
+        out: &mut Self::WordBuf,
+    ) {
+        let _ = who;
+        self.encode_observation(observation, out);
+    }
+
     /// Convenience helper to observe and encode in one call.
     fn observe_and_encode(&self, state: &Self::State, who: Observer, out: &mut Self::WordBuf) {
         let observation = self.observe(state, who);
-        self.encode_observation(&observation, out);
+        self.encode_observation_for(who, &observation, out);
     }
 }
 
@@ -47,5 +58,17 @@ where
 
     fn encode_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         self.encode_player_observation(observation, out);
+    }
+
+    fn encode_observation_for(
+        &self,
+        who: Observer,
+        observation: &Self::Obs,
+        out: &mut Self::WordBuf,
+    ) {
+        match who {
+            Observer::Player(_) => self.encode_player_observation(observation, out),
+            Observer::Spectator => self.encode_spectator_observation(observation, out),
+        }
     }
 }

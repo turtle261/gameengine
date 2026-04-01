@@ -25,9 +25,7 @@ impl<const MAX_WORDS: usize> BitPacket<MAX_WORDS> {
     }
 
     fn push_word(&mut self, word: u64) {
-        self.words
-            .push(word)
-            .expect("bit packet capacity exceeded");
+        self.words.push(word).expect("bit packet capacity exceeded");
     }
 }
 
@@ -56,6 +54,8 @@ pub struct EnvStep<const MAX_WORDS: usize> {
 /// Errors produced by compact environment reset/step operations.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum EnvError {
+    /// Step was requested after the session already terminated.
+    SessionTerminated,
     /// Action bit pattern does not decode into a legal action value.
     InvalidActionEncoding {
         /// Raw encoded action word.
@@ -89,6 +89,7 @@ pub enum EnvError {
 impl fmt::Display for EnvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SessionTerminated => write!(f, "cannot step a terminal session"),
             Self::InvalidActionEncoding { encoded } => {
                 write!(f, "invalid compact action encoding: {encoded}")
             }
@@ -204,6 +205,10 @@ where
 
     /// Steps the environment from an encoded action value.
     pub fn step(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError> {
+        if self.session.is_terminal() {
+            return Err(EnvError::SessionTerminated);
+        }
+
         let Some(action) = self.session.game().decode_action(action_bits) else {
             return Err(EnvError::InvalidActionEncoding {
                 encoded: action_bits,
@@ -228,17 +233,17 @@ where
 
         let (reward, terminated) = {
             let outcome = self.session.step_with_joint_actions(&actions);
-            (outcome.reward_for(0), outcome.is_terminal())
+            (outcome.reward_for(self.agent_player), outcome.is_terminal())
         };
 
         let spec = self.session.game().compact_spec();
-        let encoded_reward = spec.try_encode_reward(reward).map_err(|_| {
-            EnvError::RewardOutOfRange {
-                reward,
-                min: spec.min_reward,
-                max: spec.max_reward,
-            }
-        })?;
+        let encoded_reward =
+            spec.try_encode_reward(reward)
+                .map_err(|_| EnvError::RewardOutOfRange {
+                    reward,
+                    min: spec.min_reward,
+                    max: spec.max_reward,
+                })?;
 
         Ok(EnvStep {
             observation_bits: self.encode_current_observation()?,
@@ -254,11 +259,9 @@ where
     /// Encodes current observation into a bounded compact packet.
     pub fn encode_current_observation(&self) -> Result<BitPacket<MAX_WORDS>, EnvError> {
         let mut encoded = G::WordBuf::default();
-        self.session.game().observe_and_encode(
-            self.session.state(),
-            self.observer,
-            &mut encoded,
-        );
+        self.session
+            .game()
+            .observe_and_encode(self.session.state(), self.observer, &mut encoded);
         if encoded.len() > MAX_WORDS {
             return Err(EnvError::ObservationOverflow {
                 actual_words: encoded.len(),
@@ -274,8 +277,7 @@ where
     }
 }
 
-impl<G, H, const MAX_WORDS: usize> InfotheoryEnvironment<MAX_WORDS>
-    for Environment<G, H, MAX_WORDS>
+impl<G, H, const MAX_WORDS: usize> InfotheoryEnvironment<MAX_WORDS> for Environment<G, H, MAX_WORDS>
 where
     G: Observe,
     H: HistoryStore<G>,
@@ -288,6 +290,176 @@ where
     /// Steps environment with compact action bits.
     fn step_bits(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError> {
         self.step(action_bits)
+    }
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::{DefaultEnvironment, EnvError, Observer};
+    use crate::buffer::FixedVec;
+    use crate::compact::CompactSpec;
+    use crate::game::Game;
+    use crate::rng::DeterministicRng;
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct DemoGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct DemoState {
+        terminal: bool,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    enum DemoAction {
+        #[default]
+        Step,
+    }
+
+    impl Game for DemoGame {
+        type State = DemoState;
+        type Action = DemoAction;
+        type PlayerObservation = u8;
+        type SpectatorObservation = u8;
+        type WorldView = u8;
+        type PlayerBuf = FixedVec<PlayerId, 2>;
+        type ActionBuf = FixedVec<DemoAction, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<DemoAction>, 2>;
+        type RewardBuf = FixedVec<PlayerReward, 2>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "demo"
+        }
+
+        fn player_count(&self) -> usize {
+            2
+        }
+
+        fn init(&self, _seed: Seed) -> Self::State {
+            DemoState { terminal: false }
+        }
+
+        fn is_terminal(&self, state: &Self::State) -> bool {
+            state.terminal
+        }
+
+        fn players_to_act(&self, state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            if !state.terminal {
+                out.push(0).unwrap();
+                out.push(1).unwrap();
+            }
+        }
+
+        fn legal_actions(&self, state: &Self::State, player: PlayerId, out: &mut Self::ActionBuf) {
+            out.clear();
+            if !state.terminal && player < 2 {
+                out.push(DemoAction::Step).unwrap();
+            }
+        }
+
+        fn observe_player(
+            &self,
+            _state: &Self::State,
+            player: PlayerId,
+        ) -> Self::PlayerObservation {
+            player as u8
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::SpectatorObservation {
+            99
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {
+            0
+        }
+
+        fn step_in_place(
+            &self,
+            state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 10,
+                })
+                .unwrap();
+            out.rewards
+                .push(PlayerReward {
+                    player: 1,
+                    reward: 20,
+                })
+                .unwrap();
+            state.terminal = true;
+            out.termination = Termination::Terminal { winner: Some(0) };
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: 1,
+                observation_bits: 64,
+                observation_stream_len: 1,
+                reward_bits: 6,
+                min_reward: 0,
+                max_reward: 63,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            match action {
+                DemoAction::Step => 0,
+            }
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(DemoAction::Step)
+        }
+
+        fn encode_player_observation(
+            &self,
+            observation: &Self::PlayerObservation,
+            out: &mut Self::WordBuf,
+        ) {
+            out.clear();
+            out.push(100 + u64::from(*observation)).unwrap();
+        }
+
+        fn encode_spectator_observation(
+            &self,
+            observation: &Self::SpectatorObservation,
+            out: &mut Self::WordBuf,
+        ) {
+            out.clear();
+            out.push(200 + u64::from(*observation)).unwrap();
+        }
+    }
+
+    #[test]
+    fn step_uses_agent_player_reward() {
+        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
+        env.set_agent_player(1);
+        let step = env.step(0).unwrap();
+        assert_eq!(step.reward.raw, 20);
+        assert_eq!(step.reward.encoded, 20);
+    }
+
+    #[test]
+    fn stepping_terminal_session_returns_error() {
+        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
+        env.step(0).unwrap();
+        assert_eq!(env.step(0), Err(EnvError::SessionTerminated));
+    }
+
+    #[test]
+    fn spectator_observations_use_spectator_encoder() {
+        let env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Spectator);
+        let packet = env.encode_current_observation().unwrap();
+        assert_eq!(packet.words(), &[299]);
     }
 }
 
