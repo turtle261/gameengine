@@ -2,7 +2,7 @@ use std::env;
 
 #[cfg(feature = "builtin")]
 use gameengine::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "builtin", feature = "physics"))]
 use gameengine::builtin::{Platformer, PlatformerAction};
 #[cfg(feature = "builtin")]
 use gameengine::{PlayerAction, Session, stable_hash};
@@ -69,7 +69,7 @@ fn run_blackjack(iterations: u64) -> u64 {
     digest ^ stable_hash(session.trace())
 }
 
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "builtin", feature = "physics"))]
 fn run_platformer(iterations: u64) -> u64 {
     let mut session = Session::new(Platformer::default(), 5);
     let script = [

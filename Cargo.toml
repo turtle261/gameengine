@@ -64,3 +64,8 @@ required-features = ["builtin"]
 name = "kernel_hotpaths"
 harness = false
 required-features = ["builtin"]
+
+[[example]]
+name = "perf_probe"
+path = "examples/perf_probe.rs"
+required-features = ["builtin"]
