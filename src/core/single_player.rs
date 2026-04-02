@@ -122,6 +122,11 @@ pub trait SinglePlayerGame {
         }
     }
 
+    /// Compact codec descriptor for an explicit parameter bundle.
+    fn compact_spec_for_params(&self, _params: &Self::Params) -> CompactSpec {
+        self.compact_spec()
+    }
+
     /// Encode an action into compact integer representation.
     fn encode_action(&self, _action: &Self::Action) -> u64 {
         0
@@ -266,6 +271,10 @@ where
 
     fn compact_spec(&self) -> CompactSpec {
         <T as SinglePlayerGame>::compact_spec(self)
+    }
+
+    fn compact_spec_for_params(&self, params: &Self::Params) -> CompactSpec {
+        <T as SinglePlayerGame>::compact_spec_for_params(self, params)
     }
 
     fn encode_action(&self, action: &Self::Action) -> u64 {

@@ -91,6 +91,11 @@ pub trait Game {
         }
     }
 
+    /// Compact codec descriptor for an explicit parameter bundle.
+    fn compact_spec_for_params(&self, _params: &Self::Params) -> CompactSpec {
+        self.compact_spec()
+    }
+
     /// Encode an action into its compact integer representation.
     fn encode_action(&self, _action: &Self::Action) -> u64 {
         0

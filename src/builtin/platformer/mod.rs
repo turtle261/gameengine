@@ -18,6 +18,10 @@ const FIRST_BERRY_BODY_ID: u16 = 10;
 const PLATFORMER_BODIES: usize = 1 + BERRY_COUNT;
 const PLATFORMER_CONTACTS: usize = PLATFORMER_BODIES * (PLATFORMER_BODIES - 1) / 2;
 const ALL_BERRIES_MASK: u8 = 0b00_111111;
+const PLATFORMER_Y_SHIFT: u8 = 8;
+const PLATFORMER_REMAINING_BERRIES_SHIFT: u8 = 16;
+const PLATFORMER_TERMINAL_SHIFT: u8 = 22;
+const PLATFORMER_OBSERVATION_BITS: u8 = PLATFORMER_TERMINAL_SHIFT + 1;
 const PLATFORMER_ACTION_ORDER: [PlatformerAction; 4] = [
     PlatformerAction::Stay,
     PlatformerAction::Left,
@@ -89,6 +93,73 @@ impl Default for PlatformerConfig {
 }
 
 impl PlatformerConfig {
+    fn checked_step_reward(
+        self,
+        collected: u8,
+        finished: bool,
+        sprained: bool,
+    ) -> Option<Reward> {
+        let mut reward = i128::from(self.berry_reward) * i128::from(collected);
+        if finished {
+            reward += i128::from(self.finish_bonus);
+        }
+        if sprained {
+            reward -= 1;
+        }
+        if reward < i128::from(Reward::MIN) || reward > i128::from(Reward::MAX) {
+            return None;
+        }
+        Some(reward as Reward)
+    }
+
+    fn reward_bounds(self) -> Option<(Reward, Reward)> {
+        let mut min_reward = Reward::MAX;
+        let mut max_reward = Reward::MIN;
+        let mut collected = 0u8;
+        while collected <= BERRY_COUNT as u8 {
+            for finished in [false, true] {
+                if finished && collected == 0 {
+                    continue;
+                }
+                for sprained in [false, true] {
+                    let reward = self.checked_step_reward(collected, finished, sprained)?;
+                    min_reward = min_reward.min(reward);
+                    max_reward = max_reward.max(reward);
+                }
+            }
+            collected += 1;
+        }
+        Some((min_reward, max_reward))
+    }
+
+    fn compact_spec(self) -> Option<CompactSpec> {
+        let (min_reward, max_reward) = self.reward_bounds()?;
+        let reward_span = i128::from(max_reward) - i128::from(min_reward);
+        if reward_span < 0 || reward_span > i128::from(u64::MAX) {
+            return None;
+        }
+        let reward_offset = -i128::from(min_reward);
+        if reward_offset < i128::from(Reward::MIN) || reward_offset > i128::from(Reward::MAX) {
+            return None;
+        }
+
+        let reward_bits = if reward_span == 0 {
+            1
+        } else {
+            (u64::BITS - (reward_span as u64).leading_zeros()) as u8
+        };
+
+        Some(CompactSpec {
+            action_count: 4,
+            observation_bits: PLATFORMER_OBSERVATION_BITS,
+            observation_stream_len: 1,
+            reward_bits,
+            min_reward,
+            max_reward,
+            reward_offset: reward_offset as Reward,
+        })
+    }
+
     /// Returns the axis-aligned world bounds.
     pub fn arena_bounds(self) -> Aabb2<StrictF64> {
         Aabb2::new(
@@ -136,6 +207,7 @@ impl PlatformerConfig {
             || self.sprain_denominator == 0
             || self.sprain_numerator > self.sprain_denominator
             || self.berry_y >= self.height
+            || self.compact_spec().is_none()
         {
             return false;
         }
@@ -232,7 +304,7 @@ impl Platformer {
         );
     }
 
-    fn collect_berries_from_contacts(state: &mut PlatformerState) -> Reward {
+    fn collect_berries_from_contacts(state: &mut PlatformerState) -> (u8, bool) {
         let was_non_terminal = state.remaining_berries != 0;
         let mut remaining = u64::from(state.remaining_berries);
         let collected = collect_actor_trigger_contacts(
@@ -243,12 +315,7 @@ impl Platformer {
             &mut remaining,
         );
         state.remaining_berries = remaining as u8;
-
-        let mut reward = state.config.berry_reward * i64::from(collected);
-        if was_non_terminal && state.remaining_berries == 0 {
-            reward += state.config.finish_bonus;
-        }
-        reward
+        (collected, was_non_terminal && state.remaining_berries == 0)
     }
 
     fn observation_from_state(state: &PlatformerState) -> PlatformerObservation {
@@ -346,17 +413,17 @@ impl single_player::SinglePlayerGame for Platformer {
     ) {
         let action = action.unwrap_or(PlatformerAction::Stay);
 
-        let mut reward = 0;
         if self.is_terminal(state) {
             out.termination = Termination::Terminal {
                 winner: Self::winner(state),
             };
+            single_player::push_reward(&mut out.rewards, 0);
         } else {
             let config = state.config;
             let (current_x, _) = Self::player_position(state);
-            let (x, y) = match action {
-                PlatformerAction::Stay => (current_x, 0),
-                PlatformerAction::Left => (current_x.saturating_sub(1), 0),
+            let (x, y, sprained) = match action {
+                PlatformerAction::Stay => (current_x, 0, false),
+                PlatformerAction::Left => (current_x.saturating_sub(1), 0, false),
                 PlatformerAction::Right => (
                     if current_x + config.player_width < config.width {
                         current_x + 1
@@ -364,12 +431,12 @@ impl single_player::SinglePlayerGame for Platformer {
                         current_x
                     },
                     0,
+                    false,
                 ),
                 PlatformerAction::Jump => {
-                    if rng.gen_bool_ratio(config.sprain_numerator, config.sprain_denominator) {
-                        reward -= 1;
-                    }
-                    (current_x, config.jump_delta)
+                    let sprained =
+                        rng.gen_bool_ratio(config.sprain_numerator, config.sprain_denominator);
+                    (current_x, config.jump_delta, sprained)
                 }
             };
 
@@ -377,10 +444,14 @@ impl single_player::SinglePlayerGame for Platformer {
                 .world
                 .set_body_position_deferred(PLAYER_BODY_ID, config.player_center(x, y));
             state.world.refresh_contacts();
-            reward += Self::collect_berries_from_contacts(state);
+            let (collected, finished) = Self::collect_berries_from_contacts(state);
             self.sync_berries(state);
             state.world.step();
 
+            let reward = config
+                .checked_step_reward(collected, finished, sprained)
+                .expect("validated platformer config produced an out-of-range reward");
+            single_player::push_reward(&mut out.rewards, reward);
             out.termination = if self.is_terminal(state) {
                 Termination::Terminal {
                     winner: Self::winner(state),
@@ -389,8 +460,6 @@ impl single_player::SinglePlayerGame for Platformer {
                 Termination::Ongoing
             };
         }
-
-        single_player::push_reward(&mut out.rewards, reward);
     }
 
     fn state_invariant(&self, state: &Self::State) -> bool {
@@ -464,30 +533,34 @@ impl single_player::SinglePlayerGame for Platformer {
 
     fn transition_postcondition(
         &self,
-        _pre: &Self::State,
+        pre: &Self::State,
         _action: Option<Self::Action>,
         post: &Self::State,
         outcome: &StepOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
+        if pre.remaining_berries == 0 {
+            return post == pre && outcome.reward_for(0) == 0 && outcome.is_terminal();
+        }
+        let Some((min_reward, max_reward)) = post.config.reward_bounds() else {
+            return false;
+        };
         reward_and_terminal_postcondition(
             outcome.reward_for(0),
-            -1,
-            11,
+            min_reward,
+            max_reward,
             post.remaining_berries == 0,
             outcome.is_terminal(),
         )
     }
 
     fn compact_spec(&self) -> CompactSpec {
-        CompactSpec {
-            action_count: 4,
-            observation_bits: 12,
-            observation_stream_len: 1,
-            reward_bits: 4,
-            min_reward: -1,
-            max_reward: 11,
-            reward_offset: 1,
-        }
+        self.compact_spec_for_params(&self.config)
+    }
+
+    fn compact_spec_for_params(&self, params: &Self::Params) -> CompactSpec {
+        params
+            .compact_spec()
+            .expect("invalid platformer config cannot produce compact spec")
     }
 
     fn encode_action(&self, action: &Self::Action) -> u64 {
@@ -501,9 +574,9 @@ impl single_player::SinglePlayerGame for Platformer {
     fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
         out.clear();
         let packed = u64::from(observation.x)
-            | (u64::from(observation.y) << 4)
-            | (u64::from(observation.remaining_berries) << 5)
-            | ((observation.terminal as u64) << 11);
+            | (u64::from(observation.y) << PLATFORMER_Y_SHIFT)
+            | (u64::from(observation.remaining_berries) << PLATFORMER_REMAINING_BERRIES_SHIFT)
+            | ((observation.terminal as u64) << PLATFORMER_TERMINAL_SHIFT);
         out.push(packed).unwrap();
     }
 }

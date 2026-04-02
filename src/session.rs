@@ -443,6 +443,11 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         self.rng
     }
 
+    /// Returns the active compact codec descriptor for current params.
+    pub fn compact_spec(&self) -> crate::compact::CompactSpec {
+        self.game.compact_spec_for_params(&self.params)
+    }
+
     /// Returns immutable trace view.
     pub fn trace(&self) -> &H::Trace {
         self.history.trace()
