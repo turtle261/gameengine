@@ -6,6 +6,7 @@ use crate::rng::DeterministicRng;
 use crate::session::{FixedHistory, SessionKernel};
 use crate::types::{ReplayStep, Seed, StepOutcome};
 
+/// Checks that runtime initialization agrees with the executable proof model.
 pub fn assert_model_init_refinement<G: RefinementWitness>(
     game: &G,
     seed: Seed,
@@ -33,6 +34,7 @@ pub fn assert_model_init_refinement<G: RefinementWitness>(
     }
 }
 
+/// Checks that runtime observations and world views agree with the proof model.
 pub fn assert_model_observation_refinement<G: RefinementWitness>(game: &G, state: &G::State) {
     let model = game.runtime_state_to_model(state);
     for player in 0..game.player_count() {
@@ -53,6 +55,7 @@ pub fn assert_model_observation_refinement<G: RefinementWitness>(game: &G, state
     assert!(game.world_view_refines_model(&world, &model_world));
 }
 
+/// Checks that one runtime transition agrees with the executable proof model.
 pub fn assert_model_step_refinement<G: RefinementWitness>(
     game: &G,
     pre: &G::State,
@@ -92,6 +95,7 @@ pub fn assert_model_step_refinement<G: RefinementWitness>(
     assert!(game.safety_transition_postcondition(pre, actions, &runtime_state, &runtime_outcome,));
 }
 
+/// Checks that session replay/rewind semantics agree with repeated model execution.
 pub fn assert_model_replay_refinement<G>(
     game: G,
     seed: Seed,

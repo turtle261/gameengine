@@ -2,6 +2,7 @@
 
 use std::sync::OnceLock;
 
+/// Classification for how strongly a component is covered by the proof system.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ProofStatus {
     /// Backed by bounded checks over the Rust implementation.
@@ -17,6 +18,7 @@ pub enum ProofStatus {
 }
 
 impl ProofStatus {
+    /// Parses a manifest status token.
     fn parse(raw: &str) -> Option<Self> {
         match raw {
             "checked" => Some(Self::Checked),
@@ -28,6 +30,7 @@ impl ProofStatus {
         }
     }
 
+    /// Returns the markdown heading used for this status in the claim matrix.
     pub fn heading(self) -> &'static str {
         match self {
             Self::Checked => "Implementation-Checked Claims",
@@ -39,34 +42,51 @@ impl ProofStatus {
     }
 }
 
+/// Kind of verification harness referenced by the proof manifest.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum HarnessKind {
+    /// A Kani harness over compiled Rust code.
     Kani,
+    /// A Verus proof file or model-checking target.
     Verus,
 }
 
+/// One proof harness entry declared in the manifest.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ManifestHarness {
+    /// Verification technology used by the harness.
     pub kind: HarnessKind,
+    /// Stable manifest identifier for the harness.
     pub id: &'static str,
+    /// Logical scope or component group the harness belongs to.
     pub scope: &'static str,
+    /// Concrete target invoked by tooling for this harness.
     pub target: &'static str,
 }
 
+/// One claim about a component inside the verified boundary.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ManifestClaim {
+    /// Strength of the claim.
     pub status: ProofStatus,
+    /// Stable component identifier used in reports.
     pub component: &'static str,
+    /// Human-readable statement of what is claimed.
     pub text: &'static str,
+    /// Proof harness identifiers that justify the claim.
     pub links: &'static [&'static str],
 }
 
+/// One explicit assumption required by a proof claim.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ManifestAssumption {
+    /// Component the assumption applies to.
     pub component: &'static str,
+    /// Human-readable statement of the assumption.
     pub text: &'static str,
 }
 
+/// Parsed proof manifest used by reporting and verification tooling.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationManifest {
     boundary: &'static str,
@@ -76,6 +96,7 @@ pub struct VerificationManifest {
 }
 
 impl VerificationManifest {
+    /// Returns the crate's statically embedded proof manifest.
     pub fn current() -> &'static Self {
         static MANIFEST: OnceLock<VerificationManifest> = OnceLock::new();
         MANIFEST.get_or_init(|| {
@@ -85,6 +106,7 @@ impl VerificationManifest {
         })
     }
 
+    /// Parses a manifest file into a structured representation.
     pub fn parse(raw: &'static str) -> Self {
         let mut boundary = "kernel+builtins";
         let mut harnesses = Vec::new();
@@ -138,34 +160,41 @@ impl VerificationManifest {
         }
     }
 
+    /// Returns the declared proof boundary label.
     pub fn boundary(&self) -> &'static str {
         self.boundary
     }
 
+    /// Returns every declared proof harness.
     pub fn harnesses(&self) -> &[ManifestHarness] {
         &self.harnesses
     }
 
+    /// Returns every declared proof claim.
     pub fn claims(&self) -> &[ManifestClaim] {
         &self.claims
     }
 
+    /// Returns every explicit assumption listed in the manifest.
     pub fn assumptions(&self) -> &[ManifestAssumption] {
         &self.assumptions
     }
 
+    /// Returns the Kani harnesses belonging to one manifest scope.
     pub fn kani_harnesses_for_scope(&self, scope: &str) -> impl Iterator<Item = &ManifestHarness> {
         self.harnesses
             .iter()
             .filter(move |harness| harness.kind == HarnessKind::Kani && harness.scope == scope)
     }
 
+    /// Returns all Verus entries in the manifest.
     pub fn verus_models(&self) -> impl Iterator<Item = &ManifestHarness> {
         self.harnesses
             .iter()
             .filter(|harness| harness.kind == HarnessKind::Verus)
     }
 
+    /// Renders the manifest into the public proof-claim markdown summary.
     pub fn render_claim_markdown(&self) -> String {
         let mut output = String::new();
         output.push_str("# Proof Claim Matrix\n\n");
@@ -228,6 +257,7 @@ impl VerificationManifest {
         output
     }
 
+    /// Validates manifest consistency, proof links, and claim/status coherence.
     pub fn validate(&self) -> Result<(), String> {
         let mut harness_ids = Vec::new();
         for harness in &self.harnesses {

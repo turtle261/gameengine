@@ -12,7 +12,9 @@ use crate::buffer::Buffer;
 use crate::game::Game;
 use crate::types::{ReplayStep, Seed};
 
+/// Rendered proof claim matrix generated from the current manifest.
 pub const PROOF_CLAIM: &str = include_str!("../../proofs/claim.md");
+/// Raw proof manifest used to drive Kani, Verus, and claim reporting.
 pub const PROOF_MANIFEST_RAW: &str = include_str!("../../proofs/manifest.txt");
 
 pub use crate::verification::{

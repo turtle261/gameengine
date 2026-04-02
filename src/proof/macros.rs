@@ -1,3 +1,4 @@
+/// Declares the standard Kani refinement harness triplet for a verified game.
 #[macro_export]
 macro_rules! declare_refinement_harnesses {
     (
