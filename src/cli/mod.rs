@@ -18,7 +18,7 @@ use crate::render::{PassivePolicyDriver, RenderConfig, RenderMode, RendererApp, 
 use crate::render::{RealtimeDriver, builtin};
 #[cfg(feature = "render")]
 use crate::session::InteractiveSession;
-use crate::{Game, Session, stable_hash};
+use crate::{Game, PlayerAction, Session, stable_hash};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RunMode {
@@ -45,14 +45,8 @@ fn resolve_policy_choice<A>(
         "human" => Err(format!(
             "unsupported {game_name} policy for replay mode: human"
         )),
-        "random" if matches!(mode, RunMode::Play) => Ok(PolicyChoice::Random),
-        "random" => Err(format!(
-            "unsupported {game_name} policy for replay mode: random"
-        )),
-        "first" if matches!(mode, RunMode::Play) => Ok(PolicyChoice::First),
-        "first" => Err(format!(
-            "unsupported {game_name} policy for replay mode: first"
-        )),
+        "random" => Ok(PolicyChoice::Random),
+        "first" => Ok(PolicyChoice::First),
         script if script.starts_with("script:") => parse_script(script)
             .map(PolicyChoice::Scripted)
             .map_err(|error| format!("{game_name} script parse error: {error}")),
@@ -113,6 +107,7 @@ pub(crate) struct CliConfig {
     seed: u64,
     max_steps: usize,
     policy: String,
+    policy_explicit: bool,
     render: bool,
     render_physics: bool,
     ticks_per_second: f64,
@@ -129,6 +124,7 @@ impl CliConfig {
             seed: 1,
             max_steps: 64,
             policy: "human".to_string(),
+            policy_explicit: false,
             render: false,
             render_physics: false,
             ticks_per_second: 12.0,
@@ -159,6 +155,7 @@ impl CliConfig {
                     config.policy = iter
                         .next()
                         .ok_or_else(|| "missing value after --policy".to_string())?;
+                    config.policy_explicit = true;
                 }
                 "--render" => {
                     config.render = true;
@@ -193,6 +190,125 @@ impl CliConfig {
 
         Ok(config)
     }
+
+    fn policy_for_mode(&self, mode: RunMode) -> &str {
+        if self.policy_explicit {
+            &self.policy
+        } else {
+            match mode {
+                RunMode::Play => "human",
+                RunMode::Replay => "first",
+            }
+        }
+    }
+}
+
+#[cfg(feature = "render")]
+fn should_stop_at_tick(tick: u64, max_steps: Option<usize>) -> bool {
+    max_steps.is_some_and(|limit| tick as usize >= limit)
+}
+
+fn collect_scripted_joint_actions<G>(
+    session: &Session<G>,
+    script: &[G::Action],
+    position: &mut usize,
+    game_name: &'static str,
+) -> Result<G::JointActionBuf, String>
+where
+    G: Game,
+{
+    let mut players = G::PlayerBuf::default();
+    session.game().players_to_act(session.state(), &mut players);
+
+    let mut joint_actions = G::JointActionBuf::default();
+    let mut legal_actions = G::ActionBuf::default();
+    for &player in players.as_slice() {
+        legal_actions.clear();
+        session
+            .game()
+            .legal_actions(session.state(), player, &mut legal_actions);
+        if legal_actions.as_slice().is_empty() {
+            return Err(format!(
+                "{game_name} player {player} has no legal actions in a non-terminal state"
+            ));
+        }
+        let Some(action) = script.get(*position).copied() else {
+            return Err(format!(
+                "{game_name} scripted policy exhausted at index {}",
+                *position
+            ));
+        };
+        if !legal_actions.as_slice().contains(&action) {
+            return Err(format!(
+                "{game_name} scripted policy action at index {} is illegal for current state",
+                *position
+            ));
+        }
+        joint_actions
+            .push(PlayerAction { player, action })
+            .expect("joint action buffer capacity exceeded");
+        *position += 1;
+    }
+
+    Ok(joint_actions)
+}
+
+#[cfg(feature = "render")]
+fn validate_scripted_policy<G>(
+    game: G,
+    seed: u64,
+    script: &[G::Action],
+    max_steps: Option<usize>,
+    game_name: &'static str,
+) -> Result<(), String>
+where
+    G: Game + Copy,
+{
+    let mut session = Session::new(game, seed);
+    let mut position = 0usize;
+    while !session.is_terminal() && !should_stop_at_tick(session.current_tick(), max_steps) {
+        let joint_actions =
+            collect_scripted_joint_actions(&session, script, &mut position, game_name)?;
+        session.step_with_joint_actions(&joint_actions);
+    }
+    Ok(())
+}
+
+fn run_scripted_headless_game<G>(
+    game: G,
+    seed: u64,
+    script: &[G::Action],
+    max_steps: usize,
+    game_name: &'static str,
+) -> Result<u64, String>
+where
+    G: Game + Observe + Copy,
+    G::Obs: Debug,
+{
+    let mut session = Session::new(game, seed);
+    let mut position = 0usize;
+    while !session.is_terminal() && (session.current_tick() as usize) < max_steps {
+        let joint_actions =
+            collect_scripted_joint_actions(&session, script, &mut position, game_name)?;
+        let reward = {
+            let outcome = session.step_with_joint_actions(&joint_actions);
+            outcome.reward_for(0)
+        };
+        let observation = session.game().observe(session.state(), Observer::Player(0));
+        let mut compact = G::WordBuf::default();
+        session
+            .game()
+            .encode_observation(&observation, &mut compact);
+        println!(
+            "tick={} reward={} terminal={} compact={:?}",
+            session.current_tick(),
+            reward,
+            session.is_terminal(),
+            compact.as_slice(),
+        );
+        println!("{observation:#?}");
+    }
+    Ok(stable_hash(session.trace()))
 }
 
 fn run_headless_game<G, H>(
@@ -211,15 +327,15 @@ where
     let mut session = Session::new(game, config.seed);
     let mut random = RandomPolicy;
     let mut first = FirstLegalPolicy;
-    let trace_hash = match resolve_policy_choice(mode, &config.policy, parse_script, game_name)? {
-        PolicyChoice::Human => run_with_policy(&mut session, config.max_steps, &mut human),
-        PolicyChoice::Random => run_with_policy(&mut session, config.max_steps, &mut random),
-        PolicyChoice::First => run_with_policy(&mut session, config.max_steps, &mut first),
-        PolicyChoice::Scripted(script) => {
-            let mut scripted = ScriptedPolicy::new_strict(script);
-            run_with_policy(&mut session, config.max_steps, &mut scripted)
-        }
-    };
+    let trace_hash =
+        match resolve_policy_choice(mode, config.policy_for_mode(mode), parse_script, game_name)? {
+            PolicyChoice::Human => run_with_policy(&mut session, config.max_steps, &mut human),
+            PolicyChoice::Random => run_with_policy(&mut session, config.max_steps, &mut random),
+            PolicyChoice::First => run_with_policy(&mut session, config.max_steps, &mut first),
+            PolicyChoice::Scripted(script) => {
+                run_scripted_headless_game(game, config.seed, &script, config.max_steps, game_name)?
+            }
+        };
 
     println!("trace hash: {trace_hash:016x}");
     Ok(())
@@ -367,7 +483,12 @@ fn run_tictactoe_render(config: CliConfig, mode: RunMode) -> Result<(), String> 
     use crate::render::builtin::TicTacToePresenter;
 
     let render_config = build_render_config(&config, RenderMode::Observation);
-    match resolve_policy_choice(mode, &config.policy, parse_tictactoe_script, "tictactoe")? {
+    match resolve_policy_choice(
+        mode,
+        config.policy_for_mode(mode),
+        parse_tictactoe_script,
+        "tictactoe",
+    )? {
         PolicyChoice::Human => RendererApp::new(
             render_config,
             TurnBasedDriver::new(InteractiveSession::new(TicTacToe, config.seed)),
@@ -395,16 +516,19 @@ fn run_tictactoe_render(config: CliConfig, mode: RunMode) -> Result<(), String> 
         )
         .run_native()
         .map_err(|error| error.to_string()),
-        PolicyChoice::Scripted(script) => RendererApp::new(
-            render_config,
-            PassivePolicyDriver::new(
-                InteractiveSession::new(TicTacToe, config.seed),
-                ScriptedPolicy::new_strict(script),
-            ),
-            TicTacToePresenter::default(),
-        )
-        .run_native()
-        .map_err(|error| error.to_string()),
+        PolicyChoice::Scripted(script) => {
+            validate_scripted_policy(TicTacToe, config.seed, &script, None, "tictactoe")?;
+            RendererApp::new(
+                render_config,
+                PassivePolicyDriver::new(
+                    InteractiveSession::new(TicTacToe, config.seed),
+                    ScriptedPolicy::new_strict(script),
+                ),
+                TicTacToePresenter::default(),
+            )
+            .run_native()
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -413,7 +537,12 @@ fn run_blackjack_render(config: CliConfig, mode: RunMode) -> Result<(), String> 
     use crate::render::builtin::BlackjackPresenter;
 
     let render_config = build_render_config(&config, RenderMode::Observation);
-    match resolve_policy_choice(mode, &config.policy, parse_blackjack_script, "blackjack")? {
+    match resolve_policy_choice(
+        mode,
+        config.policy_for_mode(mode),
+        parse_blackjack_script,
+        "blackjack",
+    )? {
         PolicyChoice::Human => RendererApp::new(
             render_config,
             TurnBasedDriver::new(InteractiveSession::new(Blackjack, config.seed)),
@@ -441,16 +570,19 @@ fn run_blackjack_render(config: CliConfig, mode: RunMode) -> Result<(), String> 
         )
         .run_native()
         .map_err(|error| error.to_string()),
-        PolicyChoice::Scripted(script) => RendererApp::new(
-            render_config,
-            PassivePolicyDriver::new(
-                InteractiveSession::new(Blackjack, config.seed),
-                ScriptedPolicy::new_strict(script),
-            ),
-            BlackjackPresenter::default(),
-        )
-        .run_native()
-        .map_err(|error| error.to_string()),
+        PolicyChoice::Scripted(script) => {
+            validate_scripted_policy(Blackjack, config.seed, &script, None, "blackjack")?;
+            RendererApp::new(
+                render_config,
+                PassivePolicyDriver::new(
+                    InteractiveSession::new(Blackjack, config.seed),
+                    ScriptedPolicy::new_strict(script),
+                ),
+                BlackjackPresenter::default(),
+            )
+            .run_native()
+            .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -464,8 +596,12 @@ fn run_platformer_render(config: CliConfig, mode: RunMode) -> Result<(), String>
     let render_config = build_render_config(&config, render_mode);
     let game = Platformer::default();
 
-    let policy_choice =
-        resolve_policy_choice(mode, &config.policy, parse_platformer_script, "platformer")?;
+    let policy_choice = resolve_policy_choice(
+        mode,
+        config.policy_for_mode(mode),
+        parse_platformer_script,
+        "platformer",
+    )?;
 
     if config.render_physics {
         match policy_choice {
@@ -496,16 +632,19 @@ fn run_platformer_render(config: CliConfig, mode: RunMode) -> Result<(), String>
             )
             .run_native()
             .map_err(|error| error.to_string()),
-            PolicyChoice::Scripted(script) => RendererApp::new(
-                render_config,
-                PassivePolicyDriver::new(
-                    InteractiveSession::new(game, config.seed),
-                    ScriptedPolicy::new_strict(script),
-                ),
-                builtin::PlatformerPhysicsPresenter::new(game.config),
-            )
-            .run_native()
-            .map_err(|error| error.to_string()),
+            PolicyChoice::Scripted(script) => {
+                validate_scripted_policy(game, config.seed, &script, None, "platformer")?;
+                RendererApp::new(
+                    render_config,
+                    PassivePolicyDriver::new(
+                        InteractiveSession::new(game, config.seed),
+                        ScriptedPolicy::new_strict(script),
+                    ),
+                    builtin::PlatformerPhysicsPresenter::new(game.config),
+                )
+                .run_native()
+                .map_err(|error| error.to_string())
+            }
         }
     } else {
         match policy_choice {
@@ -536,16 +675,19 @@ fn run_platformer_render(config: CliConfig, mode: RunMode) -> Result<(), String>
             )
             .run_native()
             .map_err(|error| error.to_string()),
-            PolicyChoice::Scripted(script) => RendererApp::new(
-                render_config,
-                PassivePolicyDriver::new(
-                    InteractiveSession::new(game, config.seed),
-                    ScriptedPolicy::new_strict(script),
-                ),
-                builtin::PlatformerPresenter::default(),
-            )
-            .run_native()
-            .map_err(|error| error.to_string()),
+            PolicyChoice::Scripted(script) => {
+                validate_scripted_policy(game, config.seed, &script, None, "platformer")?;
+                RendererApp::new(
+                    render_config,
+                    PassivePolicyDriver::new(
+                        InteractiveSession::new(game, config.seed),
+                        ScriptedPolicy::new_strict(script),
+                    ),
+                    builtin::PlatformerPresenter::default(),
+                )
+                .run_native()
+                .map_err(|error| error.to_string())
+            }
         }
     }
 }
@@ -556,7 +698,9 @@ fn print_usage() {
     println!(
         "  gameengine play <game> [--seed N] [--max-steps N] [--policy human|random|first|script:...]"
     );
-    println!("  gameengine replay <game> [--seed N] [--max-steps N] [--policy script:...]");
+    println!(
+        "  gameengine replay <game> [--seed N] [--max-steps N] [--policy first|random|script:...]"
+    );
     println!("  gameengine validate");
     println!("available games:");
     for descriptor in all_games() {
@@ -709,5 +853,60 @@ impl Policy<Platformer> for HumanPlatformer {
             }
             println!("legal actions: {:?}", legal_actions);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CliConfig, PolicyChoice, RunMode, parse_tictactoe_script, resolve_policy_choice,
+        run_scripted_headless_game,
+    };
+    use crate::builtin::{TicTacToe, TicTacToeAction};
+
+    #[test]
+    fn replay_defaults_to_first_policy() {
+        let config = CliConfig::parse(Vec::<String>::new()).unwrap();
+        let choice = resolve_policy_choice(
+            RunMode::Replay,
+            config.policy_for_mode(RunMode::Replay),
+            parse_tictactoe_script,
+            "tictactoe",
+        )
+        .unwrap();
+        assert!(matches!(choice, PolicyChoice::First));
+    }
+
+    #[test]
+    fn replay_accepts_explicit_random_policy() {
+        let choice = resolve_policy_choice(
+            RunMode::Replay,
+            "random",
+            parse_tictactoe_script,
+            "tictactoe",
+        )
+        .unwrap();
+        assert!(matches!(choice, PolicyChoice::Random));
+    }
+
+    #[test]
+    fn scripted_headless_run_reports_exhaustion() {
+        let error =
+            run_scripted_headless_game(TicTacToe, 1, &[TicTacToeAction(0)], 64, "tictactoe")
+                .unwrap_err();
+        assert!(error.contains("scripted policy exhausted"));
+    }
+
+    #[test]
+    fn scripted_headless_run_reports_illegal_action() {
+        let error = run_scripted_headless_game(
+            TicTacToe,
+            1,
+            &[TicTacToeAction(0), TicTacToeAction(0)],
+            64,
+            "tictactoe",
+        )
+        .unwrap_err();
+        assert!(error.contains("scripted policy action at index 1 is illegal"));
     }
 }

@@ -93,12 +93,7 @@ impl Default for PlatformerConfig {
 }
 
 impl PlatformerConfig {
-    fn checked_step_reward(
-        self,
-        collected: u8,
-        finished: bool,
-        sprained: bool,
-    ) -> Option<Reward> {
+    fn checked_step_reward(self, collected: u8, finished: bool, sprained: bool) -> Option<Reward> {
         let mut reward = i128::from(self.berry_reward) * i128::from(collected);
         if finished {
             reward += i128::from(self.finish_bonus);
@@ -369,6 +364,10 @@ impl single_player::SinglePlayerGame for Platformer {
 
     fn name(&self) -> &'static str {
         "platformer"
+    }
+
+    fn params_invariant(&self, params: &Self::Params) -> bool {
+        params.invariant()
     }
 
     fn init_with_params(&self, _seed: Seed, params: &Self::Params) -> Self::State {

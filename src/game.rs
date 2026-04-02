@@ -49,6 +49,15 @@ pub trait Game {
         Self::Params::default()
     }
 
+    /// Returns whether a parameter bundle is valid for `init_with_params`.
+    ///
+    /// Infallible engine APIs may assume this precondition holds. Fallible wrappers
+    /// such as compact environments can use it to reject malformed runtime input
+    /// before calling into game initialization.
+    fn params_invariant(&self, _params: &Self::Params) -> bool {
+        true
+    }
+
     /// Initialize deterministic state from a seed and parameter bundle.
     fn init_with_params(&self, seed: Seed, params: &Self::Params) -> Self::State;
 

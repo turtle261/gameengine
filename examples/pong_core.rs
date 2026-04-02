@@ -42,7 +42,11 @@ impl Pong {
         st.bx = W / 2;
         st.by = H / 2;
         st.vx = if toward_p1 { -1 } else { 1 };
-        st.vy = if (st.s1 + st.s2).is_multiple_of(2) { 1 } else { -1 };
+        st.vy = if (st.s1 + st.s2).is_multiple_of(2) {
+            1
+        } else {
+            -1
+        };
     }
 }
 

@@ -381,6 +381,11 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
 
     /// Creates a new session initialized from `seed` and explicit params.
     pub fn new_with_params(game: G, seed: Seed, params: G::Params) -> Self {
+        assert!(
+            game.params_invariant(&params),
+            "invalid params for game `{}`",
+            game.name()
+        );
         let state = game.init_with_params(seed, &params);
         assert!(game.state_invariant(&state));
         let rng = DeterministicRng::from_seed_and_stream(seed, 1);
@@ -407,6 +412,11 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
 
     /// Resets session state/history to `seed` and updates active params.
     pub fn reset_with_params(&mut self, seed: Seed, params: G::Params) {
+        assert!(
+            self.game.params_invariant(&params),
+            "invalid params for game `{}`",
+            self.game.name()
+        );
         self.params = params;
         self.state = self.game.init_with_params(seed, &self.params);
         self.rng = DeterministicRng::from_seed_and_stream(seed, 1);

@@ -95,6 +95,11 @@ pub enum EnvError {
         /// Number of players exposed by the game.
         player_count: usize,
     },
+    /// Parameter bundle was rejected by the game's parameter invariant.
+    InvalidParameters {
+        /// Stable machine-readable game name.
+        game: &'static str,
+    },
 }
 
 impl fmt::Display for EnvError {
@@ -132,6 +137,9 @@ impl fmt::Display for EnvError {
                 f,
                 "agent player {player} is outside player range 0..{player_count}"
             ),
+            Self::InvalidParameters { game } => {
+                write!(f, "invalid parameter bundle for game `{game}`")
+            }
         }
     }
 }
@@ -178,17 +186,37 @@ where
     G: Observe,
     H: HistoryStore<G>,
 {
+    fn validate_params(game: &G, params: &G::Params) -> Result<(), EnvError> {
+        if game.params_invariant(params) {
+            Ok(())
+        } else {
+            Err(EnvError::InvalidParameters { game: game.name() })
+        }
+    }
+
     /// Creates a new compact environment initialized with explicit params.
-    pub fn new_with_params(game: G, seed: Seed, observer: Observer, params: G::Params) -> Self {
+    pub fn try_new_with_params(
+        game: G,
+        seed: Seed,
+        observer: Observer,
+        params: G::Params,
+    ) -> Result<Self, EnvError> {
+        Self::validate_params(&game, &params)?;
         let agent_player = match observer {
             Observer::Player(player) => player,
             Observer::Spectator => 0,
         };
-        Self {
+        Ok(Self {
             session: SessionKernel::new_with_params(game, seed, params),
             observer,
             agent_player,
-        }
+        })
+    }
+
+    /// Creates a new compact environment initialized with explicit params.
+    pub fn new_with_params(game: G, seed: Seed, observer: Observer, params: G::Params) -> Self {
+        Self::try_new_with_params(game, seed, observer, params)
+            .expect("invalid parameter bundle for compact environment")
     }
 
     /// Creates a new compact environment.
@@ -260,6 +288,7 @@ where
         seed: Seed,
         params: G::Params,
     ) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+        Self::validate_params(self.session.game(), &params)?;
         self.session.reset_with_params(seed, params);
         self.encode_current_observation()
     }
@@ -400,6 +429,9 @@ mod regression_tests {
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct ParamRewardGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct RejectingParamsGame;
 
     impl Game for DemoGame {
         type Params = u8;
@@ -834,6 +866,113 @@ mod regression_tests {
         }
     }
 
+    impl Game for RejectingParamsGame {
+        type Params = i32;
+        type State = i32;
+        type Action = u8;
+        type Obs = i32;
+        type WorldView = ();
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn default_params(&self) -> Self::Params {
+            0
+        }
+
+        fn name(&self) -> &'static str {
+            "rejecting-params"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn params_invariant(&self, params: &Self::Params) -> bool {
+            *params >= 0
+        }
+
+        fn init_with_params(&self, _seed: Seed, params: &Self::Params) -> Self::State {
+            assert!(*params >= 0);
+            *params
+        }
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::Obs {
+            *state
+        }
+
+        fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
+            *state
+        }
+
+        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
+
+        fn step_in_place(
+            &self,
+            _state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut StepOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 0,
+                })
+                .unwrap();
+        }
+
+        fn compact_spec(&self) -> CompactSpec {
+            CompactSpec {
+                action_count: 1,
+                observation_bits: 8,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 0,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            u64::from(*action)
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(0)
+        }
+
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            out.clear();
+            out.push(*observation as u64).unwrap();
+        }
+
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            self.encode_player_observation(observation, out);
+        }
+    }
+
     #[test]
     fn step_uses_agent_player_reward() {
         let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
@@ -910,6 +1049,36 @@ mod regression_tests {
         let step = env.step(0).unwrap();
         assert_eq!(step.reward.raw, 5);
         assert_eq!(step.reward.encoded, 5);
+    }
+
+    #[test]
+    fn reset_with_invalid_params_returns_error() {
+        let mut env = DefaultEnvironment::<RejectingParamsGame, 1>::new(
+            RejectingParamsGame,
+            1,
+            Observer::Player(0),
+        );
+        assert_eq!(
+            env.reset_with_params(1, -1),
+            Err(EnvError::InvalidParameters {
+                game: "rejecting-params"
+            })
+        );
+    }
+
+    #[test]
+    fn try_new_with_invalid_params_returns_error() {
+        assert!(matches!(
+            DefaultEnvironment::<RejectingParamsGame, 1>::try_new_with_params(
+                RejectingParamsGame,
+                1,
+                Observer::Player(0),
+                -1,
+            ),
+            Err(EnvError::InvalidParameters {
+                game: "rejecting-params"
+            })
+        ));
     }
 }
 

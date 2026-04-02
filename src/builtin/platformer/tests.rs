@@ -182,11 +182,8 @@ fn parameterized_environment_uses_wide_observation_schema() {
         berry_xs: [1, 6, 11, 16, 21, 26],
         ..PlatformerConfig::default()
     };
-    let mut env = DefaultEnvironment::<Platformer, 1>::new(
-        Platformer::default(),
-        3,
-        Observer::Player(0),
-    );
+    let mut env =
+        DefaultEnvironment::<Platformer, 1>::new(Platformer::default(), 3, Observer::Player(0));
     let packet = env.reset_with_params(3, config).unwrap();
     assert_eq!(packet.words().len(), 1);
     assert!(packet.words()[0] > 4095);

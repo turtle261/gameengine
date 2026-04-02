@@ -86,6 +86,10 @@ pub trait SinglePlayerGame {
     fn default_params(&self) -> Self::Params {
         Self::Params::default()
     }
+    /// Returns whether a parameter bundle is valid for `init_with_params`.
+    fn params_invariant(&self, _params: &Self::Params) -> bool {
+        true
+    }
     /// Initialize deterministic state from a seed and parameter bundle.
     fn init_with_params(&self, seed: Seed, params: &Self::Params) -> Self::State;
     /// Whether the state is terminal.
@@ -219,6 +223,10 @@ where
 
     fn default_params(&self) -> Self::Params {
         <T as SinglePlayerGame>::default_params(self)
+    }
+
+    fn params_invariant(&self, params: &Self::Params) -> bool {
+        <T as SinglePlayerGame>::params_invariant(self, params)
     }
 
     fn init_with_params(&self, seed: Seed, params: &Self::Params) -> Self::State {
