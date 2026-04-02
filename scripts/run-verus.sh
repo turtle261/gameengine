@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+MANIFEST_FILE="${ROOT_DIR}/proofs/manifest.txt"
 
 REQUIRE_VERUS="${REQUIRE_VERUS:-0}"
 AUTO_FETCH_VERUS="${AUTO_FETCH_VERUS:-0}"
@@ -76,7 +77,14 @@ if [[ -z "${VERUS_BIN_PATH:-}" ]]; then
   exit 0
 fi
 
-mapfile -t verus_models < <(find proofs/verus -type f -name '*.rs' | sort)
+mapfile -t verus_models < <(
+  while IFS='|' read -r kind _id path; do
+    [[ -z "${kind:-}" || "${kind:0:1}" == "#" ]] && continue
+    if [[ "$kind" == "verus" ]]; then
+      printf '%s\n' "$path"
+    fi
+  done < "$MANIFEST_FILE" | sort
+)
 
 if [[ ${#verus_models[@]} -eq 0 ]]; then
   echo "[verus] no Verus model files found under proofs/verus"

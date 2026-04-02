@@ -13,7 +13,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [features]
 default = []
-proof = []
 physics = []
 builtin = []
 cli = ["builtin"]

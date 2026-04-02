@@ -9,7 +9,7 @@ ITERATIONS="${2:-2000000}"
 FEATURES="${FEATURES:-builtin physics}"
 DATA_FILE="${PERF_DATA_FILE:-/var/tmp/gameengine-perf.data}"
 
-export TMPDIR="${TMPDIR:-/var/tmp}"
+export TMPDIR="${TMPDIR:-/tmp}"
 
 if ! command -v perf >/dev/null 2>&1; then
   echo "perf is not installed"

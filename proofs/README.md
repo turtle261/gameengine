@@ -38,7 +38,8 @@ exploring an unbounded rejection loop.
 
 ## What Is Verified
 
-See [`proofs/claim.md`](claim.md) for a precise verified vs tested vs out-of-scope matrix.
+See [`proofs/manifest.txt`](manifest.txt) for the machine-readable proof boundary and
+[`proofs/claim.md`](claim.md) for the rendered human-readable matrix.
 
 - Fixed-capacity buffer behavior in [`src/buffer.rs`](../src/buffer.rs)
 - Reward and replay encoding primitives in [`src/types.rs`](../src/types.rs)
@@ -49,7 +50,8 @@ See [`proofs/claim.md`](claim.md) for a precise verified vs tested vs out-of-sco
 - Physics invariants for the engine-owned 2D world and the platformer environment when
   `builtin` and `physics` are enabled
 - Verus model lemmas in [`proofs/verus/session_refinement.rs`](verus/session_refinement.rs)
-  for replay fold refinement and canonical observation-schema constraints
+  and [`proofs/verus/liveness_model.rs`](verus/liveness_model.rs)
+  for replay fold refinement, canonical observation-schema constraints, and liveness scaffolding
 - Render/input/runtime behavior is covered by tests and benchmarks; it is not currently
   claimed as fully formally verified
 
@@ -63,12 +65,15 @@ See [`proofs/claim.md`](claim.md) for a precise verified vs tested vs out-of-sco
    - `world_view_invariant`
    - `transition_postcondition`
 2. Add runtime tests for determinism, replay, compact codecs, and rollback if the game uses sessions.
-3. Add `#[cfg(kani)]` proof harnesses in the game module.
-4. Call the shared helpers in [`src/verification.rs`](../src/verification.rs) for transition and observation contracts.
-5. If the game exposes a compact codec, prove action round-trips and reward range correctness.
-6. If the game uses the `physics` feature, prove the world invariant before and after every step.
-7. If the game is a first-party reference environment, gate it behind `builtin` and add its
-  harnesses to [`scripts/run-verification.sh`](../scripts/run-verification.sh).
+3. Implement the proof-layer traits in [`src/proof/model.rs`](../src/proof/model.rs) when the
+   game opts into executable model/refinement checks.
+   Add an explicit `impl proof::VerifiedGame for MyGame {}` only after the stronger surface is intentional.
+4. Add `#[cfg(kani)]` proof harnesses in the game module, preferably through the proof macros.
+5. Call the shared helpers in [`src/verification.rs`](../src/verification.rs) for transition and observation contracts.
+6. If the game exposes a compact codec, prove action round-trips and reward range correctness.
+7. If the game uses the `physics` feature, prove the world invariant before and after every step.
+8. If the game is a first-party reference environment, register its claims and harnesses in
+   [`proofs/manifest.txt`](manifest.txt) so the verification scripts and claim docs stay aligned.
 
 ## Acceptance Rule
 

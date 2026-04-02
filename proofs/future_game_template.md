@@ -27,6 +27,18 @@ Implement and document:
 
 For single-player games, prefer implementing `core::single_player::SinglePlayerGame` and let the engine provide the `Game` adapter wiring.
 
+## Proof-Layer Checklist
+
+If the game should participate in the stronger verified surface, also implement:
+
+- `proof::ModelGame`
+- `proof::RefinementWitness`
+- `proof::VerifiedGame`
+- `proof::TerminationWitness` when a ranking argument exists
+- `proof::ProbabilisticWitness` when the game has finite-support stochastic choices
+
+Register all Kani and Verus links in `proofs/manifest.txt`.
+
 ## Kani Harness Skeleton
 
 ```rust
@@ -36,28 +48,26 @@ mod proofs {
     use crate::buffer::FixedVec;
     use crate::types::PlayerAction;
 
-    #[kani::proof]
-    fn transition_contract_holds_for_representative_step() {
-        let game = MyGame::default();
-        let state = game.init_with_params(1, &game.default_params());
-        let mut actions = FixedVec::<PlayerAction<MyAction>, 1>::default();
-        actions.push(PlayerAction { player: 0, action: MyAction::Default }).unwrap();
-        crate::verification::assert_transition_contracts(&game, &state, &actions, 1);
-    }
-
-    #[kani::proof]
-    fn observation_contract_holds_for_initial_state() {
-        let game = MyGame::default();
-        let state = game.init_with_params(1, &game.default_params());
-        crate::verification::assert_observation_contracts(&game, &state);
-    }
-
-    #[kani::proof]
-    fn compact_round_trip_holds() {
-        let game = MyGame::default();
-        crate::verification::assert_compact_roundtrip(&game, &MyAction::Default);
-    }
+    crate::declare_refinement_harnesses!(
+        game = MyGame::default(),
+        params = MyGame::default().default_params(),
+        seed = 1,
+        actions = {
+            let mut actions = FixedVec::<PlayerAction<MyAction>, 1>::default();
+            actions.push(PlayerAction { player: 0, action: MyAction::Default }).unwrap();
+            actions
+        },
+        init = mygame_init_refines_runtime,
+        step = mygame_step_refines_runtime,
+        replay = mygame_replay_refines_runtime,
+    );
 }
+```
+
+Outside the proof module, add:
+
+```rust
+impl crate::proof::VerifiedGame for MyGame {}
 ```
 
 If your game uses shuffle-heavy setup or rejection-sampled RNG, keep Kani harness seeds concrete unless you have a separately bounded proof wrapper for that RNG path.

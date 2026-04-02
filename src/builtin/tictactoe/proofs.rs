@@ -1,8 +1,31 @@
 use super::{TicTacToe, TicTacToeAction, TicTacToeCell, TicTacToeState};
 use crate::buffer::FixedVec;
 use crate::game::Game;
+use crate::proof::{assert_finite_support_is_valid, assert_ranked_progress};
 use crate::session::{FixedHistory, SessionKernel};
 use crate::types::PlayerAction;
+
+fn action(cell: u8) -> FixedVec<PlayerAction<TicTacToeAction>, 1> {
+    let mut actions = FixedVec::<PlayerAction<TicTacToeAction>, 1>::default();
+    actions
+        .push(PlayerAction {
+            player: 0,
+            action: TicTacToeAction(cell),
+        })
+        .unwrap();
+    actions
+}
+
+crate::declare_refinement_harnesses!(
+    game = TicTacToe,
+    params = (),
+    seed = 7,
+    actions = action(0),
+    trace = [action(0), action(0)],
+    init = ttt_model_init_refines_runtime,
+    step = ttt_model_step_refines_runtime,
+    replay = ttt_model_replay_refines_runtime,
+);
 
 #[kani::proof]
 #[kani::unwind(16)]
@@ -75,4 +98,16 @@ fn invalid_move_never_mutates_board() {
     let before = *session.state();
     session.step_with_joint_actions(&actions);
     assert_eq!(*session.state(), before);
+}
+
+#[kani::proof]
+#[kani::unwind(16)]
+fn ranked_progress_holds_for_opening_move() {
+    assert_ranked_progress(&TicTacToe, &TicTacToeState::default(), &action(0), 7);
+}
+
+#[kani::proof]
+#[kani::unwind(16)]
+fn probabilistic_support_is_finite_and_nonempty() {
+    assert_finite_support_is_valid(&TicTacToe, &TicTacToeState::default(), &action(0));
 }

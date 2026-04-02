@@ -4,64 +4,22 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-export TMPDIR="${TMPDIR:-/var/tmp}"
+export TMPDIR="${TMPDIR:-/tmp}"
 MODE="${VERIFICATION_MODE:-full}"
+MANIFEST_FILE="${ROOT_DIR}/proofs/manifest.txt"
 
-COMMON_HARNESSES=(
-  bit_words_round_trip
-  fixed_vec_push_preserves_prefix_order
-  compact_reward_round_trip
-  compact_observation_words_match_schema
-  compact_reward_bit_width_is_enforced
-  step_outcome_reward_lookup_defaults_to_zero
-  env_rejects_invalid_observation_words
-  env_rejects_reward_encoding_that_exceeds_bit_width
-  replay_trace_records_steps
-  rng_state_sanitization_is_total
-  seeded_stream_constructor_handles_reference_cases
-  next_u64_is_repeatable_for_reference_states
-  rewind_restores_prior_state
-)
-
-BUILTIN_GAME_HARNESSES=(
-  concrete_seed_shuffle_is_a_full_permutation
-  player_observation_hides_opponent_hand_before_terminal
-  initial_observation_contracts_hold_for_concrete_seed
-  stand_action_replays_deterministically_for_seed_17
-  hand_evaluation_matches_busted_flag
-  legal_actions_are_exactly_empty_cells
-  invalid_move_never_mutates_board
-)
-
-PHYSICS_HARNESSES=(
-  clamping_keeps_body_in_bounds
-  oracle_view_matches_world_storage
-  wall_clamps_hold_for_all_edge_positions
-  jump_reward_is_bounded
-  initial_observation_and_world_contracts_hold
-  berry_mask_tracks_trigger_activation
-)
-
-run_kani_harnesses() {
-  local label="$1"
+run_kani_scope() {
+  local scope="$1"
   shift
   local -a extra_args=("$@")
 
-  for harness in "${COMMON_HARNESSES[@]}"; do
-    echo "[kani] Running ${label} harness: ${harness}"
-    cargo kani --lib "${extra_args[@]}" --harness "${harness}"
-  done
-}
-
-run_builtin_kani_harnesses() {
-  local label="$1"
-  shift
-  local -a extra_args=("$@")
-
-  for harness in "${BUILTIN_GAME_HARNESSES[@]}"; do
-    echo "[kani] Running ${label} harness: ${harness}"
-    cargo kani --lib "${extra_args[@]}" --harness "${harness}"
-  done
+  while IFS='|' read -r kind id harness_scope target; do
+    [[ -z "${kind:-}" || "${kind:0:1}" == "#" ]] && continue
+    if [[ "$kind" == "kani" && "$harness_scope" == "$scope" ]]; then
+      echo "[kani] Running ${scope} harness: ${id}"
+      cargo kani --lib "${extra_args[@]}" --harness "${target}"
+    fi
+  done < "$MANIFEST_FILE"
 }
 
 run_kani_matrix() {
@@ -71,16 +29,13 @@ run_kani_matrix() {
   fi
 
   echo "[kani] default headless kernel"
-  run_kani_harnesses "default"
+  run_kani_scope "default"
 
   echo "[kani] builtin reference games"
-  run_builtin_kani_harnesses "builtin" --features builtin
+  run_kani_scope "builtin" --features builtin
 
   echo "[kani] builtin + physics games"
-  for harness in "${PHYSICS_HARNESSES[@]}"; do
-    echo "[kani] Running builtin+physics harness: ${harness}"
-    cargo kani --lib --features "builtin physics" --harness "${harness}"
-  done
+  run_kani_scope "builtin+physics" --features "builtin physics"
 }
 
 if [[ "$MODE" != "kani-only" ]]; then

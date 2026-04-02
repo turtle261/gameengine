@@ -1,7 +1,6 @@
 //! Deterministic game engine core with compact codecs, verification hooks, and render adapters.
 
 pub mod core;
-#[cfg(feature = "proof")]
 pub mod proof;
 #[cfg(feature = "builtin")]
 pub mod registry;

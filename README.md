@@ -85,7 +85,24 @@ Current proof surface includes:
 - rollback/replay restoration properties,
 - builtin game invariants in the harness matrix,
 - engine-owned 2D physics invariants,
-- Verus replay/observation refinement models.
+- manifest-driven Kani/Verus proof registration,
+- executable model/refinement scaffolding for verified games,
+- Verus replay/observation/liveness models.
+
+The machine-readable proof boundary lives in [`proofs/manifest.txt`](proofs/manifest.txt).
+Claims are intentionally split by status:
+
+- `refined`: backed by Verus model laws and Kani refinement checks,
+- `checked`: bounded Kani proofs over the Rust implementation,
+- `model`: Verus-only model claims,
+- `runtime`: tested/benchmarked behavior,
+- `out_of_scope`: explicitly outside the formal boundary.
+
+Games only opt into the stronger surface explicitly:
+
+- implement `proof::ModelGame` and `proof::RefinementWitness`,
+- add an explicit `impl proof::VerifiedGame for MyGame {}`,
+- register the claim and harness ids in `proofs/manifest.txt`.
 
 Render/runtime behavior is validated by tests and benchmarks; the GPU/driver stack is intentionally outside full formal proof scope.
 
@@ -107,12 +124,16 @@ Pin and auto-fetch the CI Verus binary:
 AUTO_FETCH_VERUS=1 REQUIRE_VERUS=1 bash scripts/run-verus.sh
 ```
 
+Render the human-readable claim matrix from the manifest:
+
+```bash
+bash scripts/render-proof-claim.sh
+```
+
 ## Feature Graph
 
 - `default = []`
   - minimal headless kernel
-- `proof`
-  - proof helper exports
 - `physics`
   - engine-owned deterministic 2D physics
 - `builtin`
