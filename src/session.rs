@@ -239,7 +239,9 @@ where
         if !tick.is_multiple_of(SNAP_EVERY as u64) {
             return;
         }
-        let slot = ((tick / SNAP_EVERY as u64) as usize - 1) % SNAPSHOTS;
+        // Snapshots are keyed by ordinal k = tick / SNAP_EVERY, including the
+        // initial tick-0 snapshot at ordinal 0.
+        let slot = (tick / SNAP_EVERY as u64) as usize % SNAPSHOTS;
         self.snapshots[slot] = HistorySnapshot {
             tick,
             state: state.clone(),
@@ -908,6 +910,27 @@ mod tests {
         assert_eq!(history.snapshots[0].tick, 0);
         assert_eq!(history.snapshots[0].state, reset_state);
         assert_eq!(history.snapshots[0].rng, reset_rng);
+    }
+
+    #[test]
+    fn fixed_history_tick_zero_restore_remains_exact_after_first_step() {
+        type Session = SessionKernel<SpinnerGame, FixedHistory<SpinnerGame, 8, 4, 1>>;
+
+        let mut session = Session::new(SpinnerGame, 9);
+        let initial_state = *session.state();
+        let initial_rng = session.rng();
+
+        session.step(&[PlayerAction {
+            player: 0,
+            action: 0,
+        }]);
+
+        let fork = session
+            .fork_at(0)
+            .expect("tick-zero fork must remain restorable");
+        assert_eq!(fork.current_tick(), 0);
+        assert_eq!(*fork.state(), initial_state);
+        assert_eq!(fork.rng(), initial_rng);
     }
 }
 
