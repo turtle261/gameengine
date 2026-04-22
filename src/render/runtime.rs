@@ -39,7 +39,7 @@ use winit::window::{Window, WindowId};
 use crate::game::{Game, OracleProjection};
 use crate::policy::Policy;
 use crate::session::{HistoryStore, SessionKernel};
-use crate::types::{PlayerAction, Reward, KernelOutcome, Tick};
+use crate::types::{KernelOutcome, PlayerAction, Reward, Tick};
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::pacer::TickPacer;
@@ -548,15 +548,11 @@ impl<G: Game, H: HistoryStore<G>, P: Policy<G>> PassivePolicyDriver<G, H, P> {
     }
 }
 
-impl<G: Game, H: HistoryStore<G>, P: Policy<G>> ActionSink<G>
-    for PassivePolicyDriver<G, H, P>
-{
+impl<G: Game, H: HistoryStore<G>, P: Policy<G>> ActionSink<G> for PassivePolicyDriver<G, H, P> {
     fn submit_command(&mut self, _command: ActionCommand<G::Action>) {}
 }
 
-impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G>
-    for PassivePolicyDriver<G, H, P>
-{
+impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G> for PassivePolicyDriver<G, H, P> {
     type History = H;
 
     fn session(&self) -> &SessionKernel<G, H> {
@@ -621,11 +617,8 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> RendererApp<G, 
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<
-    G: Game + 'static,
-    D: TickDriver<G> + ActionSink<G> + 'static,
-    P: Presenter<G> + 'static,
-> RendererApp<G, D, P>
+impl<G: Game + 'static, D: TickDriver<G> + ActionSink<G> + 'static, P: Presenter<G> + 'static>
+    RendererApp<G, D, P>
 {
     /// Runs the native window event loop.
     pub fn run_native(self) -> Result<(), RenderError> {
@@ -675,7 +668,9 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> NativeApp<G, D,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> ApplicationHandler for NativeApp<G, D, P> {
+impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> ApplicationHandler
+    for NativeApp<G, D, P>
+{
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window_state.is_some() {
             return;
@@ -1551,7 +1546,7 @@ mod tests {
     use crate::policy::FirstLegalPolicy;
     use crate::rng::DeterministicRng;
     use crate::session::Session;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
+    use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed, Termination};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct CounterGame;

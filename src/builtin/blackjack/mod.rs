@@ -9,7 +9,7 @@ use crate::core::cards::{
 use crate::core::single_player::{self, SinglePlayerRewardBuf};
 use crate::game::OracleProjection;
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Seed, KernelOutcome, Termination};
+use crate::types::{KernelOutcome, PlayerId, Seed, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 const MAX_HAND_CARDS: usize = 12;
 const DECK_SIZE: usize = 52;

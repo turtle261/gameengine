@@ -401,7 +401,7 @@ mod tests {
 
 #[cfg(kani)]
 mod proofs {
-    use super::{PlayerReward, ReplayTrace, KernelOutcome, Termination};
+    use super::{KernelOutcome, PlayerReward, ReplayTrace, Termination};
     use crate::buffer::FixedVec;
 
     #[kani::proof]

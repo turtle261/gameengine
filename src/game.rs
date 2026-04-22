@@ -6,7 +6,7 @@ use core::hash::Hash;
 use crate::buffer::Buffer;
 use crate::compact::{CompactError, CompactSpec};
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome};
+use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed};
 
 /// Compatibility authoring trait that carries the full historical monolithic game surface.
 ///

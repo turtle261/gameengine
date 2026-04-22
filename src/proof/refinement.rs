@@ -4,7 +4,7 @@ use crate::buffer::Buffer;
 use crate::proof::model::RefinementWitness;
 use crate::rng::DeterministicRng;
 use crate::session::{FixedHistory, SessionKernel};
-use crate::types::{SessionStepRecord, Seed, KernelOutcome};
+use crate::types::{KernelOutcome, Seed, SessionStepRecord};
 
 /// Checks that runtime initialization agrees with the executable proof model.
 pub fn assert_model_init_refinement<G: RefinementWitness>(

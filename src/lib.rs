@@ -46,7 +46,7 @@ pub use session::{
     SessionKernel,
 };
 pub use types::{
-    DynamicReplayTrace, JointActionProfile, JointActionProfileError, PlayerAction, PlayerId,
-    PlayerReward, SessionStepRecord, ReplayTrace, Reward, Seed, KernelOutcome, Termination, Tick,
+    DynamicReplayTrace, JointActionProfile, JointActionProfileError, KernelOutcome, PlayerAction,
+    PlayerId, PlayerReward, ReplayTrace, Reward, Seed, SessionStepRecord, Termination, Tick,
     stable_hash,
 };

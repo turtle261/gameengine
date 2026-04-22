@@ -10,7 +10,7 @@ pub mod refinement;
 
 use crate::buffer::Buffer;
 use crate::game::Game;
-use crate::types::{SessionStepRecord, Seed};
+use crate::types::{Seed, SessionStepRecord};
 
 /// Rendered proof claim matrix generated from the current manifest.
 pub const PROOF_CLAIM: &str = include_str!("../../proofs/claim.md");

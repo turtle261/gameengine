@@ -7,7 +7,7 @@ use crate::buffer::{Buffer, FixedVec};
 use crate::compact::{CompactError, CompactSpec};
 use crate::game::GameAuthoring;
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, PlayerId, PlayerReward, Reward, Seed, KernelOutcome};
+use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Reward, Seed};
 
 /// Canonical acting player id used by single-player environments.
 pub const SOLO_PLAYER: PlayerId = 0;
@@ -350,4 +350,3 @@ where
         )
     }
 }
-

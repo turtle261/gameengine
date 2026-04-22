@@ -12,8 +12,8 @@ use gameengine::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction
 #[cfg(feature = "physics")]
 use gameengine::builtin::{Platformer, PlatformerAction};
 use gameengine::{
-    CompactSpec, DeterministicRng, FixedVec, Game, GameAuthoring, PlayerAction, PlayerReward,
-    Session, KernelOutcome, stable_hash,
+    CompactSpec, DeterministicRng, FixedVec, Game, GameAuthoring, KernelOutcome, PlayerAction,
+    PlayerReward, Session, stable_hash,
 };
 
 struct CountingAllocator;

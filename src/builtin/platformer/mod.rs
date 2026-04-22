@@ -10,7 +10,7 @@ use crate::physics::{
     set_trigger_mask_deferred,
 };
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Reward, Seed, KernelOutcome, Termination};
+use crate::types::{KernelOutcome, PlayerId, Reward, Seed, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 
 const BERRY_COUNT: usize = 6;

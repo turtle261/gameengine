@@ -1,6 +1,6 @@
 use gameengine::core::single_player::{self, SinglePlayerGame, SinglePlayerRewardBuf};
 use gameengine::{
-    Buffer, DeterministicRng, FixedVec, PlayerId, Seed, Session, KernelOutcome, Termination,
+    Buffer, DeterministicRng, FixedVec, KernelOutcome, PlayerId, Seed, Session, Termination,
 };
 
 const W: i16 = 40;

@@ -3,7 +3,7 @@
 use crate::buffer::Buffer;
 use crate::game::Game;
 use crate::rng::DeterministicRng;
-use crate::types::{Reward, Seed, KernelOutcome};
+use crate::types::{KernelOutcome, Reward, Seed};
 
 /// Returns true when a reward stays in range and terminal flags remain consistent.
 pub fn reward_and_terminal_postcondition(
@@ -78,7 +78,7 @@ mod tests {
     use crate::compact::CompactSpec;
     use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome};
+    use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct MinimalGame {

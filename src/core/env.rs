@@ -500,7 +500,7 @@ mod regression_tests {
     use crate::compact::CompactSpec;
     use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
+    use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed, Termination};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct DemoGame;
@@ -690,7 +690,6 @@ mod regression_tests {
             8
         }
 
-
         fn step_in_place(
             &self,
             _state: &mut Self::State,
@@ -784,7 +783,6 @@ mod regression_tests {
         fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
             0
         }
-
 
         fn step_in_place(
             &self,
@@ -886,7 +884,6 @@ mod regression_tests {
         fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
             *state
         }
-
 
         fn step_in_place(
             &self,
@@ -997,7 +994,6 @@ mod regression_tests {
         fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
             *state
         }
-
 
         fn step_in_place(
             &self,
@@ -1173,7 +1169,7 @@ mod proofs {
     use crate::compact::CompactSpec;
     use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
+    use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed, Termination};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct ObservationViolationGame;
@@ -1228,7 +1224,6 @@ mod proofs {
         fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
             8
         }
-
 
         fn step_in_place(
             &self,
@@ -1323,7 +1318,6 @@ mod proofs {
         fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
             0
         }
-
 
         fn step_in_place(
             &self,

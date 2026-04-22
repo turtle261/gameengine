@@ -7,7 +7,7 @@ use crate::buffer::{Buffer, default_array};
 use crate::game::{Game, OracleProjection};
 use crate::policy::Policy;
 use crate::rng::DeterministicRng;
-use crate::types::{DynamicReplayTrace, PlayerAction, ReplayTrace, Seed, KernelOutcome, Tick};
+use crate::types::{DynamicReplayTrace, KernelOutcome, PlayerAction, ReplayTrace, Seed, Tick};
 
 /// Saved checkpoint used by history implementations for rewind.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
@@ -768,7 +768,7 @@ mod tests {
     use crate::buffer::FixedVec;
     use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
+    use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed, Termination};
 
     use super::{DynamicHistory, SessionKernel};
 
@@ -874,7 +874,7 @@ mod proofs {
     use crate::buffer::FixedVec;
     use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
+    use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed, Termination};
 
     use super::SessionKernel;
 

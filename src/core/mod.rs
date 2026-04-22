@@ -27,7 +27,7 @@ pub use crate::session::{
     SessionKernel,
 };
 pub use crate::types::{
-    DynamicReplayTrace, JointActionProfile, JointActionProfileError, PlayerAction, PlayerId,
-    PlayerReward, SessionStepRecord, ReplayTrace, Reward, Seed, KernelOutcome, Termination, Tick,
+    DynamicReplayTrace, JointActionProfile, JointActionProfileError, KernelOutcome, PlayerAction,
+    PlayerId, PlayerReward, ReplayTrace, Reward, Seed, SessionStepRecord, Termination, Tick,
     stable_hash,
 };

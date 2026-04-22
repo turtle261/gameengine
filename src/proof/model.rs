@@ -5,7 +5,7 @@ use core::fmt::Debug;
 use crate::compact::CompactSpec;
 use crate::game::{Game, OracleProjection};
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Seed, KernelOutcome};
+use crate::types::{KernelOutcome, PlayerId, Seed};
 
 /// Safety contracts lifted out of the runtime trait surface.
 pub trait SafetyWitness: Game {

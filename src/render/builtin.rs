@@ -17,7 +17,9 @@ use crate::physics::PhysicsOracleView2d;
 use crate::session::{HistoryStore, SessionKernel};
 
 use super::scene::Color;
-use super::{ActionCommand, ActionSink, FrameMetrics, Point2, Presenter, Rect, RenderGameView, Scene2d};
+use super::{
+    ActionCommand, ActionSink, FrameMetrics, Point2, Presenter, Rect, RenderGameView, Scene2d,
+};
 
 const BG: Color = Color::from_rgb8(17, 24, 39);
 const PANEL: Color = Color::from_rgb8(30, 41, 59);
@@ -226,7 +228,6 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
     }
 }
 
-
 /// Observation presenter for blackjack.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BlackjackPresenter {
@@ -395,7 +396,6 @@ impl Presenter<Blackjack> for BlackjackPresenter {
         );
     }
 }
-
 
 #[cfg(feature = "physics")]
 /// Observation presenter for platformer.
@@ -572,7 +572,6 @@ impl Presenter<Platformer> for PlatformerPresenter {
     }
 }
 
-
 #[cfg(feature = "physics")]
 /// Oracle/world presenter for platformer physics debugging.
 #[derive(Clone, Copy, Debug, Default)]
@@ -730,7 +729,6 @@ impl Presenter<Platformer> for PlatformerPhysicsPresenter {
         );
     }
 }
-
 
 fn tictactoe_status(observation: &TicTacToeObservation, reward: i64, tick: u64) -> String {
     let headline = if observation.terminal {

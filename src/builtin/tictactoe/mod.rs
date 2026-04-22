@@ -6,11 +6,10 @@ use crate::core::single_player::{self, SinglePlayerRewardBuf};
 use crate::game::OracleProjection;
 use crate::proof::{
     FairnessWitness, FiniteSupportOutcome, ModelGame, ProbabilisticWitness, RefinementWitness,
-    SafetyWitness,
-    TerminationWitness, VerifiedGame,
+    SafetyWitness, TerminationWitness, VerifiedGame,
 };
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Seed, KernelOutcome, Termination};
+use crate::types::{KernelOutcome, PlayerId, Seed, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 
 const WIN_LINES: [(usize, usize, usize); 8] = [
@@ -432,13 +431,16 @@ impl RefinementWitness for TicTacToe {
 
     fn assert_world_refinement_if_present(&self, state: &Self::State, model: &Self::ModelState) {
         let world = <Self as OracleProjection>::world_view(self, state);
-        let model_world = <Self as crate::proof::ModelOracleProjection>::model_world_view(self, model);
+        let model_world =
+            <Self as crate::proof::ModelOracleProjection>::model_world_view(self, model);
         assert!(self.safety_world_view_invariant(state, &world));
-        assert!(<Self as crate::proof::OracleRefinementWitness>::world_view_refines_model(
-            self,
-            &world,
-            &model_world,
-        ));
+        assert!(
+            <Self as crate::proof::OracleRefinementWitness>::world_view_refines_model(
+                self,
+                &world,
+                &model_world,
+            )
+        );
     }
 }
 
