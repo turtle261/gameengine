@@ -3,13 +3,14 @@
 use crate::buffer::{Buffer, FixedVec};
 use crate::compact::{CompactSpec, decode_enum_action, encode_enum_action};
 use crate::core::single_player::{self, SinglePlayerRewardBuf};
+use crate::game::OracleProjection;
 use crate::math::{Aabb2, StrictF64, Vec2};
 use crate::physics::{
     BodyKind, PhysicsBody2d, PhysicsWorld2d, collect_actor_trigger_contacts,
     set_trigger_mask_deferred,
 };
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Reward, Seed, StepOutcome, Termination};
+use crate::types::{PlayerId, Reward, Seed, KernelOutcome, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 
 const BERRY_COUNT: usize = 6;
@@ -354,7 +355,6 @@ impl single_player::SinglePlayerGame for Platformer {
     type State = PlatformerState;
     type Action = PlatformerAction;
     type Obs = PlatformerObservation;
-    type WorldView = PlatformerWorldView;
     type ActionBuf = FixedVec<PlatformerAction, 4>;
     type WordBuf = FixedVec<u64, 1>;
 
@@ -395,20 +395,12 @@ impl single_player::SinglePlayerGame for Platformer {
         Self::observation_from_state(state)
     }
 
-    fn world_view(&self, state: &Self::State) -> Self::WorldView {
-        PlatformerWorldView {
-            config: state.config,
-            physics: state.world.clone(),
-            berries: berry_views(state.config, state.remaining_berries),
-        }
-    }
-
     fn step_in_place(
         &self,
         state: &mut Self::State,
         action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<SinglePlayerRewardBuf>,
+        out: &mut KernelOutcome<SinglePlayerRewardBuf>,
     ) {
         let action = action.unwrap_or(PlatformerAction::Stay);
 
@@ -509,25 +501,10 @@ impl single_player::SinglePlayerGame for Platformer {
         observation == &Self::observation_from_state(state)
     }
 
-    fn world_view_invariant(&self, state: &Self::State, world: &Self::WorldView) -> bool {
-        if world.config != state.config || world.physics != state.world {
-            return false;
-        }
-
-        let mut index = 0usize;
-        while index < world.berries.len() {
-            let berry = world.berries[index];
-            if berry.id != FIRST_BERRY_BODY_ID + index as u16
-                || berry.x != state.config.berry_xs[index]
-                || berry.y != state.config.berry_y
-                || berry.collected != ((state.remaining_berries & (1u8 << index)) == 0)
-            {
-                return false;
-            }
-            index += 1;
-        }
-
-        true
+    fn oracle_world_view_invariant(&self, state: &Self::State) -> bool {
+        let world: <Self as OracleProjection>::WorldView =
+            <Self as OracleProjection>::world_view(self, state);
+        <Self as OracleProjection>::world_view_invariant(self, state, &world)
     }
 
     fn transition_postcondition(
@@ -535,7 +512,7 @@ impl single_player::SinglePlayerGame for Platformer {
         pre: &Self::State,
         _action: Option<Self::Action>,
         post: &Self::State,
-        outcome: &StepOutcome<SinglePlayerRewardBuf>,
+        outcome: &KernelOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         if pre.remaining_berries == 0 {
             return post == pre && outcome.reward_for(0) == 0 && outcome.is_terminal();
@@ -552,11 +529,7 @@ impl single_player::SinglePlayerGame for Platformer {
         )
     }
 
-    fn compact_spec(&self) -> CompactSpec {
-        self.compact_spec_for_params(&self.config)
-    }
-
-    fn compact_spec_for_params(&self, params: &Self::Params) -> CompactSpec {
+    fn compact_spec_for(&self, params: &Self::Params) -> CompactSpec {
         params
             .compact_spec()
             .expect("invalid platformer config cannot produce compact spec")
@@ -577,6 +550,39 @@ impl single_player::SinglePlayerGame for Platformer {
             | (u64::from(observation.remaining_berries) << PLATFORMER_REMAINING_BERRIES_SHIFT)
             | ((observation.terminal as u64) << PLATFORMER_TERMINAL_SHIFT);
         out.push(packed).unwrap();
+    }
+}
+
+impl OracleProjection for Platformer {
+    type WorldView = PlatformerWorldView;
+
+    fn world_view(&self, state: &Self::State) -> Self::WorldView {
+        PlatformerWorldView {
+            config: state.config,
+            physics: state.world.clone(),
+            berries: berry_views(state.config, state.remaining_berries),
+        }
+    }
+
+    fn world_view_invariant(&self, state: &Self::State, world: &Self::WorldView) -> bool {
+        if world.config != state.config || world.physics != state.world {
+            return false;
+        }
+
+        let mut index: usize = 0;
+        while index < world.berries.len() {
+            let berry = world.berries[index];
+            if berry.id != FIRST_BERRY_BODY_ID + index as u16
+                || berry.x != state.config.berry_xs[index]
+                || berry.y != state.config.berry_y
+                || berry.collected != ((state.remaining_berries & (1u8 << index)) == 0)
+            {
+                return false;
+            }
+            index += 1;
+        }
+
+        true
     }
 }
 

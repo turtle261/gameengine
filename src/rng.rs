@@ -81,16 +81,24 @@ impl DeterministicRng {
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
 
-    /// Samples uniformly in `[0, end)`.
+    /// Samples uniformly in `[0, end)` by exact rejection over the `2^64`-element source.
+    ///
+    /// Follows the specification verbatim: let `q = floor(2^64 / e)` and
+    /// `zone = q * e`; draw `candidate = next_u64()` repeatedly until
+    /// `candidate < zone`; return `candidate mod e`. The remainder
+    /// `r = 2^64 mod e` yields `zone = 2^64 - r`, so the acceptance
+    /// predicate `candidate < zone` equals `candidate <= u64::MAX - r`
+    /// when `r > 0`, and unconditionally accepts every value when `r == 0`
+    /// (i.e. when `e` divides `2^64`).
     pub fn gen_range(&mut self, end: usize) -> usize {
         if end <= 1 {
             return 0;
         }
-        let end = end as u64;
-        let zone = u64::MAX - u64::MAX % end;
+        let end: u64 = end as u64;
+        let r: u64 = end.wrapping_neg() % end;
         loop {
-            let candidate = self.next_u64();
-            if candidate < zone {
+            let candidate: u64 = self.next_u64();
+            if r == 0 || candidate <= u64::MAX - r {
                 return (candidate % end) as usize;
             }
         }

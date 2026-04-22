@@ -7,8 +7,9 @@ use crate::core::cards::{
     is_standard_deck_52_permutation, pack_cards_nibbles,
 };
 use crate::core::single_player::{self, SinglePlayerRewardBuf};
+use crate::game::OracleProjection;
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Seed, StepOutcome, Termination};
+use crate::types::{PlayerId, Seed, KernelOutcome, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 const MAX_HAND_CARDS: usize = 12;
 const DECK_SIZE: usize = 52;
@@ -224,7 +225,6 @@ impl single_player::SinglePlayerGame for Blackjack {
     type State = BlackjackState;
     type Action = BlackjackAction;
     type Obs = BlackjackObservation;
-    type WorldView = BlackjackWorldView;
     type ActionBuf = FixedVec<BlackjackAction, 2>;
     type WordBuf = FixedVec<u64, 4>;
 
@@ -314,16 +314,12 @@ impl single_player::SinglePlayerGame for Blackjack {
         }
     }
 
-    fn world_view(&self, state: &Self::State) -> Self::WorldView {
-        self.observe_spectator(state)
-    }
-
     fn step_in_place(
         &self,
         state: &mut Self::State,
         action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<SinglePlayerRewardBuf>,
+        out: &mut KernelOutcome<SinglePlayerRewardBuf>,
     ) {
         let reward = if self.is_terminal(state) {
             out.termination = Termination::Terminal {
@@ -421,12 +417,18 @@ impl single_player::SinglePlayerGame for Blackjack {
         }
     }
 
+    fn oracle_world_view_invariant(&self, state: &Self::State) -> bool {
+        let world: <Self as OracleProjection>::WorldView =
+            <Self as OracleProjection>::world_view(self, state);
+        <Self as OracleProjection>::world_view_invariant(self, state, &world)
+    }
+
     fn transition_postcondition(
         &self,
         _pre: &Self::State,
         _action: Option<Self::Action>,
         post: &Self::State,
-        outcome: &StepOutcome<SinglePlayerRewardBuf>,
+        outcome: &KernelOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         reward_and_terminal_postcondition(
             outcome.reward_for(0),
@@ -437,7 +439,7 @@ impl single_player::SinglePlayerGame for Blackjack {
         )
     }
 
-    fn compact_spec(&self) -> CompactSpec {
+    fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
         CompactSpec {
             action_count: 2,
             observation_bits: 64,
@@ -489,6 +491,14 @@ impl single_player::SinglePlayerGame for Blackjack {
             observation.opponent_visible_len,
             out,
         );
+    }
+}
+
+impl OracleProjection for Blackjack {
+    type WorldView = BlackjackWorldView;
+
+    fn world_view(&self, state: &Self::State) -> Self::WorldView {
+        <Self as single_player::SinglePlayerGame>::observe_spectator(self, state)
     }
 }
 

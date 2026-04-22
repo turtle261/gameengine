@@ -44,6 +44,7 @@ See [`proofs/manifest.txt`](manifest.txt) for the machine-readable proof boundar
 - Fixed-capacity buffer behavior in [`src/buffer.rs`](../src/buffer.rs)
 - Reward and replay encoding primitives in [`src/types.rs`](../src/types.rs)
 - Compact reward codec soundness in [`src/compact.rs`](../src/compact.rs)
+- AIXI front-door token/percept contract in [`src/core/env.rs`](../src/core/env.rs)
 - PRNG replay/fork determinism in [`src/rng.rs`](../src/rng.rs)
 - Rollback and replay restoration in [`src/session.rs`](../src/session.rs)
 - Game-specific properties in the builtin game modules when `builtin` is enabled
@@ -57,7 +58,7 @@ See [`proofs/manifest.txt`](manifest.txt) for the machine-readable proof boundar
 
 ## Verification Pattern For New Games
 
-1. Implement the `Game` proof hooks:
+1. Implement the contract/oracle proof hooks (`ContractSurface` + optional `OracleProjection`):
    - `state_invariant`
    - `action_invariant`
    - `player_observation_invariant`
@@ -70,7 +71,7 @@ See [`proofs/manifest.txt`](manifest.txt) for the machine-readable proof boundar
    Add an explicit `impl proof::VerifiedGame for MyGame {}` only after the stronger surface is intentional.
 4. Add `#[cfg(kani)]` proof harnesses in the game module, preferably through the proof macros.
 5. Call the shared helpers in [`src/verification.rs`](../src/verification.rs) for transition and observation contracts.
-6. If the game exposes a compact codec, prove action round-trips and reward range correctness.
+6. If the game exposes a compact codec, prove action round-trips and reward range correctness for the active params.
 7. If the game uses the `physics` feature, prove the world invariant before and after every step.
 8. If the game is a first-party reference environment, register its claims and harnesses in
    [`proofs/manifest.txt`](manifest.txt) so the verification scripts and claim docs stay aligned.

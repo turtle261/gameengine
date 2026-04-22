@@ -1,5 +1,5 @@
 use super::*;
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::policy::{FirstLegalPolicy, RandomPolicy};
 use crate::session::Session;
 use crate::types::PlayerAction;
@@ -112,7 +112,7 @@ fn verification_helpers_hold_for_player_hit() {
         })
         .unwrap();
     assert_transition_contracts(&game, &state, &actions, 11);
-    assert_compact_roundtrip(&game, &BlackjackAction::Hit);
+    assert_compact_roundtrip(&game, &game.default_params(), &BlackjackAction::Hit);
 }
 
 #[test]

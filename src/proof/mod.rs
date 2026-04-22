@@ -10,7 +10,7 @@ pub mod refinement;
 
 use crate::buffer::Buffer;
 use crate::game::Game;
-use crate::types::{ReplayStep, Seed};
+use crate::types::{SessionStepRecord, Seed};
 
 /// Rendered proof claim matrix generated from the current manifest.
 pub const PROOF_CLAIM: &str = include_str!("../../proofs/claim.md");
@@ -27,7 +27,10 @@ pub use liveness::{
 pub use manifest::{
     ManifestAssumption, ManifestClaim, ManifestHarness, ProofStatus, VerificationManifest,
 };
-pub use model::{ModelGame, RefinementWitness, SafetyWitness, VerifiedGame};
+pub use model::{
+    ModelGame, ModelOracleProjection, OracleRefinementWitness, RefinementWitness, SafetyWitness,
+    VerifiedGame,
+};
 pub use refinement::{
     assert_model_init_refinement, assert_model_observation_refinement,
     assert_model_replay_refinement, assert_model_step_refinement,
@@ -43,14 +46,15 @@ pub fn assert_generated_game_surface<G: Game>(
     game: &G,
     state: &G::State,
     actions: &G::JointActionBuf,
+    params: &G::Params,
     seed: Seed,
 ) {
     assert_transition_contracts(game, state, actions, seed);
     assert_observation_contracts(game, state);
-    if game.compact_spec().action_count > 0
+    if game.compact_spec_for(params).action_count > 0
         && let Some(first) = actions.as_slice().first()
     {
-        assert_compact_roundtrip(game, &first.action);
+        assert_compact_roundtrip(game, params, &first.action);
     }
 }
 
@@ -62,7 +66,7 @@ pub fn assert_verified_game_safety_surface<G: VerifiedGame>(
     params: &G::Params,
     seed: Seed,
 ) {
-    assert_generated_game_surface(game, state, actions, seed);
+    assert_generated_game_surface(game, state, actions, params, seed);
     assert_model_init_refinement(game, seed, params);
     assert_model_observation_refinement(game, state);
     assert_model_step_refinement(game, state, actions, seed);
@@ -76,7 +80,7 @@ pub fn assert_verified_game_replay_surface<G>(
     trace: &[G::JointActionBuf],
 ) where
     G: VerifiedGame + Clone,
-    ReplayStep<G::JointActionBuf, G::RewardBuf>: Default,
+    SessionStepRecord<G::JointActionBuf, G::RewardBuf>: Default,
 {
     assert_model_replay_refinement(game, seed, params, trace);
 }

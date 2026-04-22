@@ -36,10 +36,10 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 #[cfg(not(target_arch = "wasm32"))]
 use winit::window::{Window, WindowId};
 
-use crate::game::Game;
+use crate::game::{Game, OracleProjection};
 use crate::policy::Policy;
 use crate::session::{HistoryStore, SessionKernel};
-use crate::types::{PlayerAction, Reward, StepOutcome, Tick};
+use crate::types::{PlayerAction, Reward, KernelOutcome, Tick};
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::pacer::TickPacer;
@@ -151,13 +151,35 @@ pub trait TickDriver<G: Game> {
     /// Returns immutable access to the current session.
     fn session(&self) -> &SessionKernel<G, Self::History>;
     /// Returns most recent transition outcome, if any.
-    fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>>;
+    fn last_outcome(&self) -> Option<&KernelOutcome<G::RewardBuf>>;
     /// Advances simulation by up to `due_ticks`.
     fn advance_ticks(&mut self, due_ticks: usize);
 }
 
 /// Presenter contract for translating game state into scene commands.
+///
+/// The associated `WorldView` type selects between the observation and oracle
+/// presentation profiles declared in specification \u{00a7}11. Observation-mode
+/// presenters set `WorldView = ()` and the runtime never captures an oracle
+/// world view; oracle-mode presenters set
+/// `WorldView = <G as OracleProjection>::WorldView` and provide a
+/// `refresh_world_view` implementation that reads
+/// `SessionKernel::world_view`, which in turn requires `G: OracleProjection`.
+///
+/// With this split, observation-mode rendering is strictly derived from
+/// canonical observations and frame timing, exactly as prescribed by the
+/// specification: no trait bound on the presenter, cache, view, driver, or
+/// renderer application forces `OracleProjection` when the presenter is
+/// observation-only.
 pub trait Presenter<G: Game> {
+    /// World-view slot type cached by the renderer and surfaced through
+    /// [`RenderGameView::world_view`] and
+    /// [`RenderGameView::previous_world_view`].
+    ///
+    /// Observation-mode presenters use `()`; oracle-mode presenters use their
+    /// game's [`OracleProjection::WorldView`].
+    type WorldView: Clone + fmt::Debug + Default;
+
     /// Returns window title text.
     fn title(&self, game: &G) -> String;
 
@@ -166,12 +188,23 @@ pub trait Presenter<G: Game> {
         (960, 640)
     }
 
+    /// Captures a snapshot of the session's oracle world view, if any.
+    ///
+    /// The default implementation returns `None`, which is correct for
+    /// observation-mode presenters. Oracle-mode presenters override this to
+    /// call `session.world_view()` (available when `G: OracleProjection`).
+    fn refresh_world_view<H: HistoryStore<G>>(
+        _session: &SessionKernel<G, H>,
+    ) -> Option<Self::WorldView> {
+        None
+    }
+
     /// Handles one window/input event.
     fn on_window_event(
         &mut self,
         event: &WindowEvent,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, G>,
+        view: &RenderGameView<'_, G, Self::WorldView>,
         actions: &mut dyn ActionSink<G>,
     );
 
@@ -180,35 +213,54 @@ pub trait Presenter<G: Game> {
         &mut self,
         scene: &mut Scene2d,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, G>,
+        view: &RenderGameView<'_, G, Self::WorldView>,
     );
 }
 
-/// Marker trait for observation-mode presenters.
-pub trait ObservationPresenter<G: Game>: Presenter<G> {}
+/// Marker trait: observation-mode presenters (spec \u{00a7}11) bind
+/// `WorldView = ()`.
+pub trait ObservationPresenter<G: Game>: Presenter<G, WorldView = ()> {}
 
-/// Marker trait for oracle/world-mode presenters.
-pub trait OraclePresenter<G: Game>: Presenter<G> {}
+impl<G, P> ObservationPresenter<G> for P
+where
+    G: Game,
+    P: Presenter<G, WorldView = ()>,
+{
+}
+
+/// Marker trait: oracle-mode presenters (spec \u{00a7}11) require
+/// `G: OracleProjection` and bind `WorldView = G::WorldView`.
+pub trait OraclePresenter<G: Game + OracleProjection>:
+    Presenter<G, WorldView = <G as OracleProjection>::WorldView>
+{
+}
+
+impl<G, P> OraclePresenter<G> for P
+where
+    G: Game + OracleProjection,
+    P: Presenter<G, WorldView = <G as OracleProjection>::WorldView>,
+{
+}
 
 #[derive(Debug)]
-pub(crate) struct ViewCache<G: Game> {
+pub(crate) struct ViewCache<G: Game, W: Clone + fmt::Debug + Default> {
     tick: Tick,
     player_observation: G::Obs,
     spectator_observation: G::Obs,
-    world_view: G::WorldView,
-    previous_world_view: Option<G::WorldView>,
-    last_outcome: Option<StepOutcome<G::RewardBuf>>,
+    oracle_world_view: Option<W>,
+    previous_world_view: Option<W>,
+    last_outcome: Option<KernelOutcome<G::RewardBuf>>,
     is_terminal: bool,
     interpolation_alpha: f32,
 }
 
-impl<G: Game> Clone for ViewCache<G> {
+impl<G: Game, W: Clone + fmt::Debug + Default> Clone for ViewCache<G, W> {
     fn clone(&self) -> Self {
         Self {
             tick: self.tick,
             player_observation: self.player_observation.clone(),
             spectator_observation: self.spectator_observation.clone(),
-            world_view: self.world_view.clone(),
+            oracle_world_view: self.oracle_world_view.clone(),
             previous_world_view: self.previous_world_view.clone(),
             last_outcome: self.last_outcome.clone(),
             is_terminal: self.is_terminal,
@@ -217,13 +269,16 @@ impl<G: Game> Clone for ViewCache<G> {
     }
 }
 
-impl<G: Game> ViewCache<G> {
-    pub(crate) fn from_session<H: HistoryStore<G>>(session: &SessionKernel<G, H>) -> Self {
+impl<G: Game, W: Clone + fmt::Debug + Default> ViewCache<G, W> {
+    pub(crate) fn from_session<H: HistoryStore<G>>(
+        session: &SessionKernel<G, H>,
+        initial_world: Option<W>,
+    ) -> Self {
         Self {
             tick: session.current_tick(),
             player_observation: session.player_observation(0),
             spectator_observation: session.spectator_observation(),
-            world_view: session.world_view(),
+            oracle_world_view: initial_world,
             previous_world_view: None,
             last_outcome: None,
             is_terminal: session.is_terminal(),
@@ -232,14 +287,19 @@ impl<G: Game> ViewCache<G> {
     }
 }
 
-/// Read-only frame view combining game descriptor and cached session-derived data.
-pub struct RenderGameView<'a, G: Game> {
+/// Read-only frame view combining game descriptor and cached session-derived
+/// data.
+///
+/// The `W` type parameter carries the cached oracle world-view slot; it is
+/// `()` for observation-mode presenters and
+/// `<G as OracleProjection>::WorldView` for oracle-mode presenters.
+pub struct RenderGameView<'a, G: Game, W: Clone + fmt::Debug + Default> {
     game: &'a G,
-    cache: &'a ViewCache<G>,
+    cache: &'a ViewCache<G, W>,
 }
 
-impl<'a, G: Game> RenderGameView<'a, G> {
-    pub(crate) fn from_cache(game: &'a G, cache: &'a ViewCache<G>) -> Self {
+impl<'a, G: Game, W: Clone + fmt::Debug + Default> RenderGameView<'a, G, W> {
+    pub(crate) fn from_cache(game: &'a G, cache: &'a ViewCache<G, W>) -> Self {
         Self { game, cache }
     }
 
@@ -263,18 +323,22 @@ impl<'a, G: Game> RenderGameView<'a, G> {
         &self.cache.spectator_observation
     }
 
-    /// Returns world/oracle view.
-    pub fn world_view(&self) -> &G::WorldView {
-        &self.cache.world_view
+    /// Returns the cached current oracle world view, if any.
+    ///
+    /// Observation-mode views (with `W = ()`) always return `None`.
+    pub fn world_view(&self) -> Option<&W> {
+        self.cache.oracle_world_view.as_ref()
     }
 
-    /// Returns previous world view when interpolation is active.
-    pub fn previous_world_view(&self) -> Option<&G::WorldView> {
+    /// Returns the cached previous oracle world view, if any.
+    ///
+    /// Observation-mode views (with `W = ()`) always return `None`.
+    pub fn previous_world_view(&self) -> Option<&W> {
         self.cache.previous_world_view.as_ref()
     }
 
     /// Returns most recent transition outcome.
-    pub fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>> {
+    pub fn last_outcome(&self) -> Option<&KernelOutcome<G::RewardBuf>> {
         self.cache.last_outcome.as_ref()
     }
 
@@ -302,7 +366,7 @@ impl<'a, G: Game> RenderGameView<'a, G> {
 /// presenters without running the native renderer loop.
 pub fn render_observation_scene<G, H, P>(
     session: &SessionKernel<G, H>,
-    last_outcome: Option<&StepOutcome<G::RewardBuf>>,
+    last_outcome: Option<&KernelOutcome<G::RewardBuf>>,
     presenter: &mut P,
     metrics: FrameMetrics,
 ) -> Scene2d
@@ -311,10 +375,10 @@ where
     H: HistoryStore<G>,
     P: ObservationPresenter<G>,
 {
-    let mut cache = ViewCache::from_session(session);
+    let mut cache: ViewCache<G, ()> = ViewCache::from_session(session, None);
     cache.last_outcome = last_outcome.cloned();
-    let view = RenderGameView::from_cache(session.game(), &cache);
-    let mut scene = Scene2d::default();
+    let view: RenderGameView<'_, G, ()> = RenderGameView::from_cache(session.game(), &cache);
+    let mut scene: Scene2d = Scene2d::default();
     presenter.populate_scene(&mut scene, metrics, &view);
     scene
 }
@@ -324,19 +388,22 @@ where
 /// This helper is window-system agnostic and works on `wasm32` targets.
 pub fn render_oracle_scene<G, H, P>(
     session: &SessionKernel<G, H>,
-    last_outcome: Option<&StepOutcome<G::RewardBuf>>,
+    last_outcome: Option<&KernelOutcome<G::RewardBuf>>,
     presenter: &mut P,
     metrics: FrameMetrics,
 ) -> Scene2d
 where
-    G: Game,
+    G: Game + OracleProjection,
     H: HistoryStore<G>,
     P: OraclePresenter<G>,
 {
-    let mut cache = ViewCache::from_session(session);
+    let initial_world: Option<<G as OracleProjection>::WorldView> = Some(session.world_view());
+    let mut cache: ViewCache<G, <G as OracleProjection>::WorldView> =
+        ViewCache::from_session(session, initial_world);
     cache.last_outcome = last_outcome.cloned();
-    let view = RenderGameView::from_cache(session.game(), &cache);
-    let mut scene = Scene2d::default();
+    let view: RenderGameView<'_, G, <G as OracleProjection>::WorldView> =
+        RenderGameView::from_cache(session.game(), &cache);
+    let mut scene: Scene2d = Scene2d::default();
     presenter.populate_scene(&mut scene, metrics, &view);
     scene
 }
@@ -346,7 +413,7 @@ where
 pub struct TurnBasedDriver<G: Game, H: HistoryStore<G>> {
     session: SessionKernel<G, H>,
     pending_action: Option<G::Action>,
-    last_outcome: Option<StepOutcome<G::RewardBuf>>,
+    last_outcome: Option<KernelOutcome<G::RewardBuf>>,
 }
 
 impl<G: Game, H: HistoryStore<G>> TurnBasedDriver<G, H> {
@@ -380,7 +447,7 @@ impl<G: Game, H: HistoryStore<G>> TickDriver<G> for TurnBasedDriver<G, H> {
         &self.session
     }
 
-    fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>> {
+    fn last_outcome(&self) -> Option<&KernelOutcome<G::RewardBuf>> {
         self.last_outcome.as_ref()
     }
 
@@ -403,7 +470,7 @@ pub struct RealtimeDriver<G: Game, H: HistoryStore<G>> {
     neutral_action: G::Action,
     continuous_action: Option<G::Action>,
     pulse_action: Option<G::Action>,
-    last_outcome: Option<StepOutcome<G::RewardBuf>>,
+    last_outcome: Option<KernelOutcome<G::RewardBuf>>,
 }
 
 impl<G: Game, H: HistoryStore<G>> RealtimeDriver<G, H> {
@@ -442,7 +509,7 @@ impl<G: Game, H: HistoryStore<G>> TickDriver<G> for RealtimeDriver<G, H> {
         &self.session
     }
 
-    fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>> {
+    fn last_outcome(&self) -> Option<&KernelOutcome<G::RewardBuf>> {
         self.last_outcome.as_ref()
     }
 
@@ -467,7 +534,7 @@ impl<G: Game, H: HistoryStore<G>> TickDriver<G> for RealtimeDriver<G, H> {
 pub struct PassivePolicyDriver<G: Game, H: HistoryStore<G>, P: Policy<G>> {
     session: SessionKernel<G, H>,
     policy: P,
-    last_outcome: Option<StepOutcome<G::RewardBuf>>,
+    last_outcome: Option<KernelOutcome<G::RewardBuf>>,
 }
 
 impl<G: Game, H: HistoryStore<G>, P: Policy<G>> PassivePolicyDriver<G, H, P> {
@@ -481,18 +548,22 @@ impl<G: Game, H: HistoryStore<G>, P: Policy<G>> PassivePolicyDriver<G, H, P> {
     }
 }
 
-impl<G: Game, H: HistoryStore<G>, P: Policy<G>> ActionSink<G> for PassivePolicyDriver<G, H, P> {
+impl<G: Game, H: HistoryStore<G>, P: Policy<G>> ActionSink<G>
+    for PassivePolicyDriver<G, H, P>
+{
     fn submit_command(&mut self, _command: ActionCommand<G::Action>) {}
 }
 
-impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G> for PassivePolicyDriver<G, H, P> {
+impl<G: Game, H: HistoryStore<G>, P: Policy<G>> TickDriver<G>
+    for PassivePolicyDriver<G, H, P>
+{
     type History = H;
 
     fn session(&self) -> &SessionKernel<G, H> {
         &self.session
     }
 
-    fn last_outcome(&self) -> Option<&StepOutcome<G::RewardBuf>> {
+    fn last_outcome(&self) -> Option<&KernelOutcome<G::RewardBuf>> {
         self.last_outcome.as_ref()
     }
 
@@ -550,8 +621,11 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> RendererApp<G, 
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<G: Game + 'static, D: TickDriver<G> + ActionSink<G> + 'static, P: Presenter<G> + 'static>
-    RendererApp<G, D, P>
+impl<
+    G: Game + 'static,
+    D: TickDriver<G> + ActionSink<G> + 'static,
+    P: Presenter<G> + 'static,
+> RendererApp<G, D, P>
 {
     /// Runs the native window event loop.
     pub fn run_native(self) -> Result<(), RenderError> {
@@ -601,9 +675,7 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> NativeApp<G, D,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> ApplicationHandler
-    for NativeApp<G, D, P>
-{
+impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> ApplicationHandler for NativeApp<G, D, P> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window_state.is_some() {
             return;
@@ -671,7 +743,7 @@ struct WindowState<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> {
     pacer: TickPacer,
     driver: D,
     presenter: P,
-    cache: ViewCache<G>,
+    cache: ViewCache<G, P::WorldView>,
     scene: Scene2d,
     gpu: GpuState,
 }
@@ -698,7 +770,9 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> WindowState<G, 
         presenter: P,
     ) -> Result<Self, RenderError> {
         let gpu = GpuState::new(window, config).await?;
-        let cache = ViewCache::from_session(driver.session());
+        let initial_world: Option<P::WorldView> = P::refresh_world_view(driver.session());
+        let cache: ViewCache<G, P::WorldView> =
+            ViewCache::from_session(driver.session(), initial_world);
         Ok(Self {
             config,
             pacer: TickPacer::new(config.tick_rate_hz, config.max_catch_up_ticks),
@@ -735,13 +809,17 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> WindowState<G, 
         self.cache.tick = session.current_tick();
         self.cache.player_observation = session.player_observation(0);
         self.cache.spectator_observation = session.spectator_observation();
-        let next_world = session.world_view();
+        // The presenter dictates whether we capture a new oracle world view:
+        // observation-mode presenters return `None`, oracle-mode presenters
+        // call `session.world_view()` and thus require `G: OracleProjection`.
+        let next_world: Option<P::WorldView> = P::refresh_world_view(session);
         if preserve_previous_world {
-            let previous_world = core::mem::replace(&mut self.cache.world_view, next_world);
-            self.cache.previous_world_view = Some(previous_world);
+            let previous_world = core::mem::replace(&mut self.cache.oracle_world_view, next_world)
+                .or(self.cache.previous_world_view.take());
+            self.cache.previous_world_view = previous_world;
         } else {
             self.cache.previous_world_view = None;
-            self.cache.world_view = next_world;
+            self.cache.oracle_world_view = next_world;
         }
         self.cache.last_outcome = self.driver.last_outcome().cloned();
         self.cache.is_terminal = session.is_terminal();
@@ -785,10 +863,10 @@ impl<G: Game, D: TickDriver<G> + ActionSink<G>, P: Presenter<G>> WindowState<G, 
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn add_debug_overlay<G: Game>(
+fn add_debug_overlay<G: Game, W: Clone + fmt::Debug + Default>(
     scene: &mut Scene2d,
     mode: RenderMode,
-    view: &RenderGameView<'_, G>,
+    view: &RenderGameView<'_, G, W>,
     metrics: FrameMetrics,
 ) {
     let panel = Rect::new(16.0, metrics.height as f32 - 108.0, 280.0, 92.0);
@@ -1469,11 +1547,11 @@ mod tests {
         RenderMode, TickDriver, TurnBasedDriver, ViewCache,
     };
     use crate::buffer::FixedVec;
-    use crate::game::Game;
+    use crate::game::{GameAuthoring, OracleProjection};
     use crate::policy::FirstLegalPolicy;
     use crate::rng::DeterministicRng;
     use crate::session::Session;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct CounterGame;
@@ -1484,12 +1562,11 @@ mod tests {
         terminal: bool,
     }
 
-    impl Game for CounterGame {
+    impl GameAuthoring for CounterGame {
         type Params = ();
         type State = CounterState;
         type Action = u8;
         type Obs = CounterState;
-        type WorldView = CounterState;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 2>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -1538,16 +1615,12 @@ mod tests {
             *state
         }
 
-        fn world_view(&self, state: &Self::State) -> Self::WorldView {
-            *state
-        }
-
         fn step_in_place(
             &self,
             state: &mut Self::State,
             joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             let delta = if joint_actions.is_empty() {
                 0
@@ -1567,6 +1640,14 @@ mod tests {
             } else {
                 Termination::Ongoing
             };
+        }
+    }
+
+    impl OracleProjection for CounterGame {
+        type WorldView = CounterState;
+
+        fn world_view(&self, state: &Self::State) -> Self::WorldView {
+            *state
         }
     }
 
@@ -1598,11 +1679,11 @@ mod tests {
         let mut driver = TurnBasedDriver::new(Session::new(CounterGame, 1));
         driver.submit_command(ActionCommand::Pulse(1));
         driver.advance_ticks(1);
-        let cache = ViewCache {
+        let cache: ViewCache<CounterGame, ()> = ViewCache {
             tick: driver.session().current_tick(),
             player_observation: driver.session().player_observation(0),
             spectator_observation: driver.session().spectator_observation(),
-            world_view: driver.session().world_view(),
+            oracle_world_view: None,
             previous_world_view: None,
             last_outcome: driver.last_outcome().cloned(),
             is_terminal: driver.session().is_terminal(),

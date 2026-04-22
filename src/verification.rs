@@ -3,7 +3,7 @@
 use crate::buffer::Buffer;
 use crate::game::Game;
 use crate::rng::DeterministicRng;
-use crate::types::{Reward, Seed, StepOutcome};
+use crate::types::{Reward, Seed, KernelOutcome};
 
 /// Returns true when a reward stays in range and terminal flags remain consistent.
 pub fn reward_and_terminal_postcondition(
@@ -32,8 +32,8 @@ pub fn assert_transition_contracts<G: Game>(
     let mut right_state = pre.clone();
     let mut left_rng = DeterministicRng::from_seed_and_stream(seed, 99);
     let mut right_rng = DeterministicRng::from_seed_and_stream(seed, 99);
-    let mut left_outcome = StepOutcome::<G::RewardBuf>::default();
-    let mut right_outcome = StepOutcome::<G::RewardBuf>::default();
+    let mut left_outcome = KernelOutcome::<G::RewardBuf>::default();
+    let mut right_outcome = KernelOutcome::<G::RewardBuf>::default();
 
     game.step_in_place(&mut left_state, actions, &mut left_rng, &mut left_outcome);
     game.step_in_place(
@@ -59,13 +59,12 @@ pub fn assert_observation_contracts<G: Game>(game: &G, state: &G::State) {
     }
     let spectator = game.observe_spectator(state);
     assert!(game.spectator_observation_invariant(state, &spectator));
-    let world = game.world_view(state);
-    assert!(game.world_view_invariant(state, &world));
+    assert!(game.oracle_world_view_invariant(state));
 }
 
-/// Asserts compact action encoding roundtrips through decode.
-pub fn assert_compact_roundtrip<G: Game>(game: &G, action: &G::Action) {
-    if game.compact_spec().action_count == 0 {
+/// Asserts compact action encoding roundtrips through decode for one parameter bundle.
+pub fn assert_compact_roundtrip<G: Game>(game: &G, params: &G::Params, action: &G::Action) {
+    if game.compact_spec_for(params).action_count == 0 {
         return;
     }
     let encoded = game.encode_action(action);
@@ -77,9 +76,9 @@ mod tests {
     use super::assert_compact_roundtrip;
     use crate::buffer::FixedVec;
     use crate::compact::CompactSpec;
-    use crate::game::Game;
+    use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome};
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct MinimalGame {
@@ -89,12 +88,11 @@ mod tests {
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct MinimalState;
 
-    impl Game for MinimalGame {
+    impl GameAuthoring for MinimalGame {
         type Params = ();
         type State = MinimalState;
         type Action = u8;
         type Obs = u8;
-        type WorldView = u8;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -140,16 +138,12 @@ mod tests {
             0
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {
-            0
-        }
-
         fn step_in_place(
             &self,
             _state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -159,7 +153,7 @@ mod tests {
                 .unwrap();
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: self.compact_actions,
                 observation_bits: 0,
@@ -175,13 +169,13 @@ mod tests {
     #[test]
     fn compact_roundtrip_is_skipped_when_action_codec_is_absent() {
         let game = MinimalGame { compact_actions: 0 };
-        assert_compact_roundtrip(&game, &0);
+        assert_compact_roundtrip(&game, &(), &0);
     }
 
     #[test]
     #[should_panic]
     fn compact_roundtrip_still_checks_declared_codec_surface() {
         let game = MinimalGame { compact_actions: 1 };
-        assert_compact_roundtrip(&game, &0);
+        assert_compact_roundtrip(&game, &(), &0);
     }
 }

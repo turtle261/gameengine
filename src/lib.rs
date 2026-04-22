@@ -27,8 +27,18 @@ pub mod verification;
 
 pub use buffer::{BitWords, Buffer, CapacityError, FixedVec};
 pub use compact::CompactSpec;
+pub use core::env::{
+    ActionToken, ActionTokenError, AixiEnvironment, DefaultEnvironment, EnvError, Environment,
+    Percept,
+};
+pub use core::serialization::{
+    BitStream, BitStreamBits, serialize_action, serialize_history, serialize_percept,
+};
 pub use core::single_player::SinglePlayerGame;
-pub use game::Game;
+pub use game::{
+    CompactCodec, ContractSurface, Game, GameAuthoring, GameKernel, ObservationModel,
+    OracleProjection,
+};
 pub use policy::{FirstLegalPolicy, FnPolicy, Policy, RandomPolicy, ScriptedPolicy};
 pub use rng::{DeterministicRng, SplitMix64};
 pub use session::{
@@ -36,6 +46,7 @@ pub use session::{
     SessionKernel,
 };
 pub use types::{
-    DynamicReplayTrace, PlayerAction, PlayerId, PlayerReward, ReplayStep, ReplayTrace, Reward,
-    Seed, StepOutcome, Termination, Tick, stable_hash,
+    DynamicReplayTrace, JointActionProfile, JointActionProfileError, PlayerAction, PlayerId,
+    PlayerReward, SessionStepRecord, ReplayTrace, Reward, Seed, KernelOutcome, Termination, Tick,
+    stable_hash,
 };

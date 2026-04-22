@@ -3,9 +3,9 @@
 use core::fmt::Debug;
 
 use crate::compact::CompactSpec;
-use crate::game::Game;
+use crate::game::{Game, OracleProjection};
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Seed, StepOutcome};
+use crate::types::{PlayerId, Seed, KernelOutcome};
 
 /// Safety contracts lifted out of the runtime trait surface.
 pub trait SafetyWitness: Game {
@@ -39,8 +39,20 @@ pub trait SafetyWitness: Game {
     }
 
     /// Returns whether the world view satisfies the declared invariant.
-    fn safety_world_view_invariant(&self, state: &Self::State, world: &Self::WorldView) -> bool {
-        self.world_view_invariant(state, world)
+    fn safety_world_view_invariant(
+        &self,
+        state: &Self::State,
+        world: &<Self as OracleProjection>::WorldView,
+    ) -> bool
+    where
+        Self: OracleProjection,
+    {
+        OracleProjection::world_view_invariant(self, state, world)
+    }
+
+    /// Returns whether the oracle/debug world-view invariant holds when enabled.
+    fn safety_oracle_world_view_invariant(&self, state: &Self::State) -> bool {
+        self.oracle_world_view_invariant(state)
     }
 
     /// Returns whether the step satisfied the declared transition postcondition.
@@ -49,7 +61,7 @@ pub trait SafetyWitness: Game {
         pre: &Self::State,
         actions: &Self::JointActionBuf,
         post: &Self::State,
-        outcome: &StepOutcome<Self::RewardBuf>,
+        outcome: &KernelOutcome<Self::RewardBuf>,
     ) -> bool {
         self.transition_postcondition(pre, actions, post, outcome)
     }
@@ -58,13 +70,18 @@ pub trait SafetyWitness: Game {
 impl<T: Game> SafetyWitness for T {}
 
 /// Executable reference semantics for a runtime `Game` implementation.
+///
+/// Per specification \u{00a7}12.2: "When the runtime game additionally implements
+/// [`OracleProjection`], the model layer may also supply a model world-view
+/// type and oracle projection." That optional surface lives in
+/// [`ModelOracleProjection`] below; [`ModelGame`] itself is the
+/// always-available reference model over state, observations, players,
+/// and transitions.
 pub trait ModelGame: Game {
     /// Model state used by refinement and liveness proofs.
     type ModelState: Clone + Debug + Eq + PartialEq;
     /// Model observation used by refinement and liveness proofs.
     type ModelObs: Clone + Debug + Eq + PartialEq;
-    /// Model world view used by refinement and liveness proofs.
-    type ModelWorldView: Clone + Debug + Eq + PartialEq;
 
     /// Initializes the model state for a seed and parameter set.
     fn model_init_with_params(&self, seed: Seed, params: &Self::Params) -> Self::ModelState;
@@ -83,21 +100,32 @@ pub trait ModelGame: Game {
     fn model_observe_player(&self, state: &Self::ModelState, player: PlayerId) -> Self::ModelObs;
     /// Returns the spectator observation for the model state.
     fn model_observe_spectator(&self, state: &Self::ModelState) -> Self::ModelObs;
-    /// Returns the world view for the model state.
-    fn model_world_view(&self, state: &Self::ModelState) -> Self::ModelWorldView;
     /// Applies one model transition in place using the same action/rng surface as runtime.
     fn model_step_in_place(
         &self,
         state: &mut Self::ModelState,
         actions: &Self::JointActionBuf,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<Self::RewardBuf>,
+        out: &mut KernelOutcome<Self::RewardBuf>,
     );
 
     /// Returns the compact encoding contract for the given parameters.
-    fn model_compact_spec_for_params(&self, params: &Self::Params) -> CompactSpec {
-        self.compact_spec_for_params(params)
+    fn model_compact_spec_for(&self, params: &Self::Params) -> CompactSpec {
+        self.compact_spec_for(params)
     }
+}
+
+/// Optional model-side oracle projection surface.
+///
+/// Implement this trait when both the runtime game implements
+/// [`OracleProjection`] *and* the model layer exposes a corresponding
+/// model world-view type, per specification \u{00a7}12.2.
+pub trait ModelOracleProjection: ModelGame + OracleProjection {
+    /// Model world view used by refinement proofs.
+    type ModelWorldView: Clone + Debug + Default + Eq + PartialEq;
+
+    /// Returns the world view for the model state.
+    fn model_world_view(&self, state: &Self::ModelState) -> Self::ModelWorldView;
 }
 
 /// Refinement witness between runtime values and executable model values.
@@ -106,8 +134,25 @@ pub trait RefinementWitness: ModelGame + SafetyWitness {
     fn runtime_state_to_model(&self, state: &Self::State) -> Self::ModelState;
     /// Projects a runtime observation into the proof model.
     fn runtime_observation_to_model(&self, observation: &Self::Obs) -> Self::ModelObs;
-    /// Projects a runtime world view into the proof model.
-    fn runtime_world_view_to_model(&self, world: &Self::WorldView) -> Self::ModelWorldView;
+
+    /// Returns whether this refinement includes an oracle world-view projection surface.
+    ///
+    /// Defaults to `false`. Witnesses whose runtime game implements
+    /// [`ModelOracleProjection`] and whose proof surface should perform
+    /// world-view refinement checks override this to return `true`.
+    fn has_oracle_refinement(&self) -> bool {
+        false
+    }
+
+    /// Performs oracle world-view refinement checks when this witness exposes that surface.
+    ///
+    /// Default behavior requires `has_oracle_refinement()` to be false.
+    fn assert_world_refinement_if_present(&self, _state: &Self::State, _model: &Self::ModelState) {
+        assert!(
+            !self.has_oracle_refinement(),
+            "oracle refinement declared but no world-view refinement hook was provided"
+        );
+    }
 
     /// Returns whether the runtime state matches the provided model state.
     fn state_refines_model(&self, state: &Self::State, model: &Self::ModelState) -> bool {
@@ -119,18 +164,28 @@ pub trait RefinementWitness: ModelGame + SafetyWitness {
         self.runtime_observation_to_model(observation) == *model
     }
 
+    /// Returns whether the runtime compact schema matches the model compact schema.
+    fn compact_spec_refines_model(&self, params: &Self::Params) -> bool {
+        self.compact_spec_for(params) == self.model_compact_spec_for(params)
+    }
+}
+
+/// Refinement extensions available when the witness also exposes an oracle
+/// model world view.
+pub trait OracleRefinementWitness: RefinementWitness + ModelOracleProjection {
+    /// Projects a runtime world view into the proof model.
+    fn runtime_world_view_to_model(
+        &self,
+        world: &<Self as OracleProjection>::WorldView,
+    ) -> <Self as ModelOracleProjection>::ModelWorldView;
+
     /// Returns whether the runtime world view matches the provided model world view.
     fn world_view_refines_model(
         &self,
-        world: &Self::WorldView,
-        model: &Self::ModelWorldView,
+        world: &<Self as OracleProjection>::WorldView,
+        model: &<Self as ModelOracleProjection>::ModelWorldView,
     ) -> bool {
         self.runtime_world_view_to_model(world) == *model
-    }
-
-    /// Returns whether the runtime compact schema matches the model compact schema.
-    fn compact_spec_refines_model(&self, params: &Self::Params) -> bool {
-        self.compact_spec_for_params(params) == self.model_compact_spec_for_params(params)
     }
 }
 

@@ -337,7 +337,7 @@ where
             }
         };
 
-    println!("trace hash: {trace_hash:016x}");
+    println!("legacy regression trace hash: {trace_hash:016x}");
     Ok(())
 }
 
@@ -459,10 +459,10 @@ fn run_validation_smoke() -> Result<(), String> {
         ]);
         run_with_policy(&mut session, 8, &mut scripted)
     };
-    println!("tictactoe trace hash: {ttt_hash:016x}");
-    println!("blackjack trace hash: {blackjack_hash:016x}");
+    println!("tictactoe legacy regression trace hash: {ttt_hash:016x}");
+    println!("blackjack legacy regression trace hash: {blackjack_hash:016x}");
     #[cfg(feature = "physics")]
-    println!("platformer trace hash: {platformer_hash:016x}");
+    println!("platformer legacy regression trace hash: {platformer_hash:016x}");
     Ok(())
 }
 
@@ -772,12 +772,12 @@ impl Policy<TicTacToe> for HumanTicTacToe {
     fn choose_action(
         &mut self,
         _game: &TicTacToe,
-        _state: &<TicTacToe as Game>::State,
+        _state: &<TicTacToe as crate::game::GameKernel>::State,
         _player: usize,
-        _observation: &<TicTacToe as Game>::Obs,
-        legal_actions: &[<TicTacToe as Game>::Action],
+        _observation: &<TicTacToe as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<TicTacToe as crate::game::GameKernel>::Action],
         _rng: &mut crate::DeterministicRng,
-    ) -> <TicTacToe as Game>::Action {
+    ) -> <TicTacToe as crate::game::GameKernel>::Action {
         loop {
             let input = prompt("choose move [0-8]: ").expect("stdin prompt failed");
             if let Ok(index) = input.trim().parse::<u8>() {
@@ -797,12 +797,12 @@ impl Policy<Blackjack> for HumanBlackjack {
     fn choose_action(
         &mut self,
         _game: &Blackjack,
-        _state: &<Blackjack as Game>::State,
+        _state: &<Blackjack as crate::game::GameKernel>::State,
         _player: usize,
-        _observation: &<Blackjack as Game>::Obs,
-        legal_actions: &[<Blackjack as Game>::Action],
+        _observation: &<Blackjack as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<Blackjack as crate::game::GameKernel>::Action],
         _rng: &mut crate::DeterministicRng,
-    ) -> <Blackjack as Game>::Action {
+    ) -> <Blackjack as crate::game::GameKernel>::Action {
         loop {
             let input = prompt("choose action [hit/stand]: ").expect("stdin prompt failed");
             let candidate = match input.trim().to_ascii_lowercase().as_str() {
@@ -829,12 +829,12 @@ impl Policy<Platformer> for HumanPlatformer {
     fn choose_action(
         &mut self,
         _game: &Platformer,
-        _state: &<Platformer as Game>::State,
+        _state: &<Platformer as crate::game::GameKernel>::State,
         _player: usize,
-        _observation: &<Platformer as Game>::Obs,
-        legal_actions: &[<Platformer as Game>::Action],
+        _observation: &<Platformer as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<Platformer as crate::game::GameKernel>::Action],
         _rng: &mut crate::DeterministicRng,
-    ) -> <Platformer as Game>::Action {
+    ) -> <Platformer as crate::game::GameKernel>::Action {
         loop {
             let input =
                 prompt("choose action [stay/left/right/jump]: ").expect("stdin prompt failed");

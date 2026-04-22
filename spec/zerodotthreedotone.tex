@@ -1,0 +1,1903 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{xurl}
+\usepackage{microtype}
+
+\emergencystretch=3em
+\sloppy
+\hbadness=10000
+\hfuzz=80pt
+
+\newcommand{\code}[1]{\ifmmode\text{\texttt{#1}}\else\texttt{#1}\fi}
+\newcommand{\Nat}{\mathbb{N}}
+\newcommand{\Bool}{\mathbb{B}}
+
+\title{\code{gameengine} Current Mathematical Specification}
+\author{Noah Cashin}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Normative status and scope}
+
+This document is a \emph{normative} specification of the Rust crate \code{gameengine}, version \code{0.3.1}, edition \code{2024}. This revision makes the curated \code{Game} and session surfaces architecturally primary, separates kernel outcomes from session step records, tightens the AIXI-native action-percept projection, hardens the AIXI adapter into a true black-box boundary with no hidden-state or RNG oracle, tightens the compact-spec parameter boundary, the descriptor-owned CLI validation surface, the single-agent environment contract, the reset invariant surface, and treats legacy trace hashes as informative historical outputs rather than normative anchors. A conforming reimplementation must preserve all public data models, action-percept laws, state-transition laws, feature-gated module availability, compact encoding laws, replay and rewind semantics, CLI command behavior, renderer driver semantics, and validation anchors stated herein.
+
+The crate metadata is:
+\begin{itemize}
+  \item package name: \code{gameengine}
+  \item version: \code{0.3.1}
+  \item license: \code{ISC}
+  \item binary target: \code{gameengine} at \code{src/bin/gameengine.rs}, requiring feature \code{cli}
+\end{itemize}
+
+The cargo feature model is exact:
+\begin{itemize}
+  \item \code{default = [ ]}
+  \item \code{physics = [ ]}
+  \item \code{builtin = [ ]}
+  \item \code{cli = ["builtin"]}
+  \item \code{parallel = ["dep:rayon"]}
+  \item \code{render = ["dep:bytemuck", "dep:glyphon", "dep:pollster", "dep:wasm-bindgen",}
+  \item \hspace*{1.5em}\code{"dep:wasm-bindgen-futures", "dep:web-sys", "dep:wgpu", "dep:winit"]}
+\end{itemize}
+
+The exposed module graph is:
+\begin{itemize}
+  \item always present: \code{core}, \code{proof}, \code{buffer}, \code{compact}, \code{game}, \code{math}, \code{policy}, \code{rng}, \code{session}, \code{types}, \code{verification}
+  \item gated by \code{builtin}: \code{builtin}, \code{registry}
+  \item gated by \code{cli}: \code{cli}
+  \item gated by \code{parallel}: \code{parallel}
+  \item gated by \code{physics}: \code{physics}
+  \item gated by \code{render}: \code{render}
+\end{itemize}
+
+A conforming implementation shall be interpreted as a family of products indexed by the active feature set $F$ together with the Rust target properties that affect the public API, in particular \code{usize} width where that width is itself part of a public datatype. The game, session, observation, compact encoding, replay, validation, and derived AIXI adapter semantics stated herein are otherwise target-independent. The historical legacy regression hash surface stated below may depend on the Rust \code{Hash} implementation and the target's \code{usize} width, but that surface is informative only and does not affect conformance. A gated module exists if and only if its gate is enabled. When a feature transitively implies another feature, the implied feature is also present.
+
+\section{Core scalar types and record types}
+
+The canonical scalar aliases are:
+\[
+\code{Reward} = \mathbb{Z}_{64},\qquad
+\code{Tick} = \mathbb{U}_{64},\qquad
+\code{PlayerId} = \code{usize},\qquad
+\code{Seed} = \mathbb{U}_{64}.
+\]
+Here $\mathbb{Z}_{64}$ denotes signed 64-bit integers, $\mathbb{U}_{64}$ denotes unsigned 64-bit integers, and \code{usize} denotes the target machine word width of the Rust compilation target.
+
+\subsection{Per-player rewards and actions}
+
+A \code{PlayerReward} is a pair
+\[
+(p, r) \in \code{PlayerId} \times \mathbb{Z}_{64}
+\]
+with fields \code{player} and \code{reward}.
+
+A \code{PlayerAction<A>} is a pair
+\[
+(p, a) \in \code{PlayerId} \times A
+\]
+with fields \code{player} and \code{action}.
+
+\subsection{Termination}
+
+\code{Termination} is the algebraic datatype
+\[
+\code{Termination} ::= \code{Ongoing} \mid \code{Terminal}\{\code{winner}: \operatorname{Option}(\code{PlayerId})\}.
+\]
+The query \code{is\_terminal} returns \code{true} exactly for the second variant.
+
+\subsection{Kernel outcomes}
+
+For any reward-buffer type $R$, a \code{KernelOutcome<R>} is the pair
+\[
+(\code{rewards},\ \code{termination}).
+\]
+Its default value is
+\[
+(R::\code{default}(),\ \code{Ongoing}).
+\]
+The method \code{clear()} sets the kernel outcome back to that default pair, except that it invokes \code{clear()} on the reward buffer rather than reconstructing it.
+
+For a reward buffer containing elements of type \code{PlayerReward},
+\code{reward\_for(player)} returns the first reward value whose \code{player} field equals the queried player, scanning from left to right; if no such entry exists, it returns $0$.
+
+A reward buffer is \emph{well formed} relative to a game iff each listed player id is in range and appears at most once. Conforming transition implementations and replay traces shall use only well-formed reward buffers. The left-to-right lookup rule above merely totalizes \code{reward\_for} on malformed buffers and is not load-bearing semantic behavior.
+
+\subsection{Session step records and replay traces}
+
+A \code{SessionStepRecord<JA,R>} is the triple
+\[
+(\code{tick},\ \code{actions},\ \code{outcome}).
+\]
+where \code{outcome} is a \code{KernelOutcome<R>}.
+
+A fixed replay trace \code{ReplayTrace<JA,R,LOG>} is
+\[
+(\code{seed},\ \code{steps})
+\]
+where \code{steps} is a fixed-capacity \code{FixedVec} of length at most \code{LOG}. Each element is a \code{SessionStepRecord<JA,R>}. Construction by \code{new(seed)} yields an empty \code{steps}. Clearing resets the stored seed and empties \code{steps}. Recording appends the current tick together with a clone of the given action buffer and cached kernel outcome, and panics if the capacity is exceeded.
+
+A dynamic replay trace \code{DynamicReplayTrace<JA,R>} is analogous, except that \code{steps} is a dynamically sized \code{Vec}. Recording always appends one \code{SessionStepRecord<JA,R>}.
+
+\section{Historical legacy regression hash}
+
+The historical function \code{stable\_hash} computes a 64-bit FNV-1a-style hash over the byte stream supplied by the relevant Rust \code{Hash} implementation. In version \code{0.3.1} this surface is retained only as an \emph{informative} legacy regression output of the current Rust implementation, not as a portable semantic digest, validation anchor, or conformance requirement. Portable conformance is instead carried by the explicit compact traces, compact encoding laws, and replay/rewind theorems stated elsewhere in this document. The legacy hash is therefore exact only relative to the same Rust \code{Hash} surface, including the target's \code{usize} width and the derived/custom \code{Hash} implementations of the hashed values. The hasher state is initialized to
+\[
+\code{OFFSET} = \code{0xcbf29ce484222325}
+\]
+and each input byte $b$ updates the state by
+\[
+H \leftarrow (H \oplus b) \cdot \code{PRIME} \pmod{2^{64}},
+\qquad \code{PRIME} = \code{0x100000001b3}.
+\]
+The final state is returned.
+
+The exact numeric hash values cited later in this document are therefore illustrative historical outputs for implementations that intentionally reproduce this hash surface. They are informative only. Whenever an explicit compact trace and a legacy hash are both stated, the explicit trace is the sole portable conformance anchor.
+
+\section{Buffer algebra}
+
+\subsection{Generic buffer interface}
+
+A \code{Buffer} with item type $T$ has:
+\begin{itemize}
+  \item a compile-time capacity $C = \code{CAPACITY}$,
+  \item operations \code{clear}, \code{len}, \code{push}, \code{as\_slice}, \code{as\_mut\_slice},
+  \item default predicates \code{is\_empty} and \code{extend\_from\_slice}.
+\end{itemize}
+The operation \code{extend\_from\_slice} pushes each element in order and aborts on the first capacity failure.
+
+\subsection{Capacity errors}
+
+\code{CapacityError} is the record \code{\{ capacity: usize \}} and signifies an attempted push past fixed capacity.
+
+\subsection{FixedVec}
+
+\code{FixedVec<T,N>} is an array-backed fixed-capacity vector with internal storage \code{data: [T;N]} and \code{len: usize}. Its exact laws are:
+\begin{enumerate}
+  \item \code{default()} produces \code{len = 0} and fills the backing array with \code{T::default()}.
+  \item \code{new()} is \code{default()}.
+  \item \code{clear()} sets \code{len := 0} and leaves backing storage otherwise unspecified but preserved.
+  \item \code{len()} returns the current populated length, \code{capacity()} returns exactly $N$, and \code{is\_empty()} is equivalent to \code{len = 0}.
+  \item \code{push(item)} succeeds iff \code{len < N}; on success it writes \code{data[len] := item} and increments \code{len}; on failure it returns \code{CapacityError\{capacity:N\}} and leaves the vector unchanged.
+  \item \code{as\_slice()} returns \code{data[0..len]}, and \code{as\_mut\_slice()} returns the same populated prefix mutably.
+  \item \code{first()} returns the first populated element when present and \code{None} otherwise.
+  \item \code{get(index)} and \code{get\_mut(index)} return the populated element at that index when \code{index < len}, and \code{None} otherwise.
+  \item \code{iter()} is the iterator over \code{as\_slice()}.
+  \item Equality, hashing, debugging, and deref behavior operate on the populated prefix only. The hash additionally prefixes the populated length before hashing the populated slice.
+  \item \code{contains(v)} is membership in the populated slice.
+\end{enumerate}
+
+\subsection{BitWords}
+
+\code{BitWords<N>} is an array of $N$ machine words \code{[u64;N]}. For a queried bit index $b$ let
+\[
+\code{word}(b) = \left\lfloor \frac{b}{64} \right\rfloor,
+\qquad
+\code{offset}(b) = b \bmod 64.
+\]
+Then:
+\begin{itemize}
+  \item \code{words()} returns immutable access to the full backing array \code{[u64;N]}.
+  \item \code{clear\_all()} sets all words to $0$.
+  \item \code{set\_bit(b)} sets the relevant bit iff \code{word(b) < N}; otherwise it is a no-op.
+  \item \code{clear\_bit(b)} clears the relevant bit iff \code{word(b) < N}; otherwise it is a no-op.
+  \item \code{test\_bit(b)} returns whether the relevant bit is set, and returns \code{false} when \code{word(b) >= N}.
+\end{itemize}
+
+\section{Mathematical utility layer}
+
+\subsection{Vectors and AABBs}
+
+\code{Vec2<T>} and \code{Vec3<T>} are coordinate records with pointwise addition and subtraction where defined.
+
+\code{Aabb2<T>} and \code{Aabb3<T>} are axis-aligned bounding boxes with fields \code{min} and \code{max}. For ordered $T$:
+\begin{align*}
+\code{contains}_{2}(p) &\iff \min_x \le p_x \le \max_x \land \min_y \le p_y \le \max_y, \\
+\code{intersects}_{2}(A,B) &\iff A.\min_x \le B.\max_x \land A.\max_x \ge B.\min_x \\
+&\qquad \land A.\min_y \le B.\max_y \land A.\max_y \ge B.\min_y.
+\end{align*}
+The three-dimensional case is analogous with a $z$ axis.
+
+\subsection{Fixed-point values}
+
+\code{Fixed<FRACTION\_BITS>} stores an internal integer \code{raw}. Its exact semantics are:
+\begin{align*}
+\code{from\_raw}(r) &: \code{raw}=r, \\
+\code{from\_int}(n) &: \code{raw}=n \cdot 2^{\code{FRACTION\_BITS}}, \\
+\code{floor\_to\_int}(x) &= x.\code{raw} \gg \code{FRACTION\_BITS}, \\
+\code{to\_f64}(x) &= \frac{x.\code{raw}}{2^{\code{FRACTION\_BITS}}}.
+\end{align*}
+Multiplication computes
+\[
+\left\lfloor \frac{x.\code{raw} \cdot y.\code{raw}}{2^{\code{FRACTION\_BITS}}} \right\rfloor
+\]
+using an intermediate signed 128-bit product. Division computes
+\[
+\operatorname{trunc\_to\_zero}\!\left(\frac{x.\code{raw} \cdot 2^{\code{FRACTION\_BITS}}}{y.\code{raw}}\right)
+\]
+using an intermediate signed 128-bit value and Rust signed integer division semantics, i.e. truncation toward zero rather than floor toward $-\infty$.
+
+\subsection{Strict floating wrappers}
+
+\code{StrictF32} stores exact IEEE-754 \code{f32} bits in a \code{u32}. \code{StrictF64} stores exact IEEE-754 \code{f64} bits in a \code{u64}. Construction from floating values preserves raw bits, not any canonicalized value.
+
+\code{StrictF64} ordering is Rust \code{total\_cmp} ordering on the decoded \code{f64} values. The method \code{is\_finite()} is decoded-value finiteness. The method \code{clamp(min,max)} decodes to \code{f64}, clamps in the real-valued sense used by Rust \code{f64::clamp}, then re-encodes the result.
+
+\section{Deterministic random number generation}
+
+Two constants are fixed:
+\[
+\code{ZERO\_STATE\_REPLACEMENT} = \code{0xCAFEBABEDEADBEEF},
+\qquad
+\code{STREAM\_XOR} = \code{0x9E3779B97F4A7C15}.
+\]
+
+\subsection{SplitMix64}
+
+\code{SplitMix64} stores one state $s \in \mathbb{U}_{64}$. Initialization with seed $z$ sets $s:=z$. The next value operation is:
+\begin{align*}
+ s &\leftarrow s + \code{STREAM\_XOR} \pmod{2^{64}}, \\
+ z &\leftarrow s, \\
+ z &\leftarrow (z \oplus (z \gg 30)) \cdot \code{0xBF58476D1CE4E5B9} \pmod{2^{64}}, \\
+ z &\leftarrow (z \oplus (z \gg 27)) \cdot \code{0x94D049BB133111EB} \pmod{2^{64}}, \\
+ \text{return } z \oplus (z \gg 31).
+\end{align*}
+
+\subsection{DeterministicRng}
+
+\code{DeterministicRng} stores \code{root\_seed} and an internal state $x \in \mathbb{U}_{64}$. State sanitization is exact:
+\[
+\operatorname{sanitize}(u) = \begin{cases}
+\code{ZERO\_STATE\_REPLACEMENT}, & u=0,\\
+u, & u \ne 0.
+\end{cases}
+\]
+
+The constructor \code{from\_seed(seed)} is \code{from\_seed\_and\_stream(seed,0)}.
+
+The constructor \code{from\_seed\_and\_stream(seed,stream\_id)} is:
+\begin{enumerate}
+  \item compute $m := \code{seed} \oplus (\code{stream\_id} \cdot \code{STREAM\_XOR} \bmod 2^{64})$,
+  \item initialize \code{SplitMix64} with state $m$,
+  \item obtain one value $u := \code{next\_u64()}$ from that mixer,
+  \item set internal state to $\operatorname{sanitize}(u)$.
+\end{enumerate}
+The root seed is stored unchanged.
+
+The accessor \code{root\_seed()} returns the stored root seed. The accessor \code{raw\_state()} returns the current internal unsanitized xorshift state word. The method \code{fork(stream\_id)} returns a new RNG built from the same root seed and the specified stream id. These introspection and forking operations belong to the trusted host-side RNG API. They are not part of the agent-facing \code{AixiEnvironment} boundary, and any adapter that exposes them directly or indirectly to the player violates this specification.
+
+The method \code{next\_u64()} updates internal state by the xorshift-style recurrence
+\begin{align*}
+ x &\leftarrow x \oplus (x \gg 12),\\
+ x &\leftarrow x \oplus (x \ll 25) \pmod{2^{64}},\\
+ x &\leftarrow x \oplus (x \gg 27),
+\end{align*}
+and then returns
+\[
+ x \cdot \code{0x2545F4914F6CDD1D} \pmod{2^{64}}.
+\]
+The stored state after the call is the intermediate $x$ before multiplication.
+
+The method \code{gen\_range(end)} is exact:
+\begin{itemize}
+  \item if \code{end <= 1}, return $0$;
+  \item otherwise let $e := \code{end}$ as \code{u64}; let
+  \[
+  q = \left\lfloor \frac{2^{64}}{e} \right\rfloor,
+  \qquad
+  \code{zone} = q \cdot e;
+  \]
+  repeatedly sample \code{candidate = next\_u64()} until \code{candidate < zone}; return \code{candidate mod e}.
+\end{itemize}
+This is exact rejection sampling over the uniform \(2^{64}\)-element source. The loop is unbounded in the worst case but has expected iteration count strictly less than $2$ for every \code{end >= 2}.
+
+The method \code{gen\_bool\_ratio(numerator,denominator)} obeys:
+\begin{itemize}
+  \item a debug assertion requires \code{denominator > 0},
+  \item if numerator $=0$, return \code{false},
+  \item if numerator $\ge$ denominator, return \code{true},
+  \item else return whether \code{next\_u64() mod denominator < numerator}.
+\end{itemize}
+
+The method \code{gen\_unit\_f64()} computes
+\[
+\frac{\code{next\_u64()} \gg 11}{2^{53}}.
+\]
+Therefore the output lies in $[0,1)$.
+
+The method \code{shuffle(slice)} performs in-place Fisher--Yates: for \code{index} from \code{len-1} down to $1$, swap \code{slice[index]} with \code{slice[gen\_range(index+1)]}.
+
+\section{Compact encoding surface}
+
+\subsection{Compact errors}
+
+The exact error variants are:
+\begin{itemize}
+  \item \code{RewardOutOfRange\{reward,min\_reward,max\_reward\}}
+  \item \code{EncodedRewardOutOfRange\{encoded,min\_reward,max\_reward\}}
+  \item \code{RewardEncodingExceedsBitWidth\{encoded,reward\_bits\}}
+  \item \code{ObservationLengthMismatch\{actual\_len,expected\_len\}}
+  \item \code{ObservationWordOutOfRange\{index,word,max\_word\}}
+  \item \code{InvalidActionEncoding\{encoded\}}
+\end{itemize}
+
+\subsection{CompactSpec}
+A \code{CompactSpec} is the record
+\[
+\begin{aligned}
+(&\code{action\_count},\code{observation\_bits},\code{observation\_stream\_len},\code{reward\_bits},\\
+ &\code{min\_reward},\code{max\_reward},\code{reward\_offset}).
+\end{aligned}
+\]
+Its exact derived quantities are:
+\begin{align*}
+\code{action\_bits} &= \begin{cases}
+0, & \code{action\_count} \le 1,\\
+\min\{b \in \Nat \mid \code{action\_count} \le 2^b\}, & \text{otherwise},
+\end{cases}\\
+\code{max\_observation\_value} &= \begin{cases}
+0, & \code{observation\_bits}=0,\\
+2^{64}-1, & \code{observation\_bits}\ge 64,\\
+2^{\code{observation\_bits}}-1, & \text{otherwise},
+\end{cases}\\
+\code{observation\_word\_bits} &= \begin{cases}
+0, & \code{observation\_bits}=0,\\
+64, & \code{observation\_bits}\ge 64,\\
+\code{observation\_bits}, & \text{otherwise},
+\end{cases}\\
+\code{max\_reward\_value} &= \begin{cases}
+0, & \code{reward\_bits}=0,\\
+2^{64}-1, & \code{reward\_bits}\ge 64,\\
+2^{\code{reward\_bits}}-1, & \text{otherwise}.
+\end{cases}\\
+\code{reward\_word\_bits} &= \begin{cases}
+0, & \code{reward\_bits}=0,\\
+64, & \code{reward\_bits}\ge 64,\\
+\code{reward\_bits}, & \text{otherwise}.
+\end{cases}
+\end{align*}
+
+\code{validate\_encoded\_reward\_bits(encoded)} succeeds iff \code{encoded <= max\_reward\_value()}.
+
+\code{validate\_observation\_words(words)} succeeds iff:
+\begin{enumerate}
+  \item \code{len(words) = observation\_stream\_len}, and
+  \item every word is at most \code{max\_observation\_value()}.
+\end{enumerate}
+It fails with the first applicable structured error above.
+
+Reward encoding is defined by
+\[
+\code{encoded} = \code{reward} + \code{reward\_offset}
+\]
+computed in signed 128-bit arithmetic. \code{try\_encode\_reward(reward)} succeeds iff:
+\begin{itemize}
+  \item \code{min\_reward <= reward <= max\_reward},
+  \item the shifted value lies in $[0,2^{64}-1]$,
+  \item the resulting \code{u64} does not exceed \code{max\_reward\_value()}.
+\end{itemize}
+Otherwise it returns either \code{RewardOutOfRange} or \code{RewardEncodingExceedsBitWidth}.
+
+Reward decoding is defined by
+\[
+\code{decoded} = \code{encoded} - \code{reward\_offset}
+\]
+computed in signed 128-bit arithmetic after bit-width validation. \code{try\_decode\_reward(encoded)} succeeds iff the decoded value lies both in $[\code{min\_reward},\code{max\_reward}]$ and within the representable range of \code{i64}.
+
+The convenience wrapper \code{encode\_reward(reward)} returns \code{try\_encode\_reward(reward)} and panics on failure with the exact message \code{"reward out of compact range"}. The convenience wrapper \code{decode\_reward(encoded)} returns \code{try\_decode\_reward(encoded)} and panics on failure with the exact message \code{"encoded reward out of compact range"}.
+
+\code{reward\_range\_is\_sound()} is true iff:
+\begin{enumerate}
+  \item \code{min\_reward <= max\_reward},
+  \item both endpoints encode successfully,
+  \item the encoded minimum is at most the encoded maximum,
+  \item each endpoint round-trips through decode.
+\end{enumerate}
+
+The helper \code{encode\_enum\_action(action, action\_table)} returns the first index at which
+\code{action\_table[index] = action}. If no such index exists, it panics with message
+\code{"action missing from compact action table"}.
+
+The helper \code{decode\_enum\_action(encoded, action\_table)} returns
+\code{action\_table[encoded]} when in range and \code{None} otherwise.
+
+\section{Game-first public architecture}
+
+The public architecture is intentionally \code{Game}-first. The primary public object is a curated \code{Game}: a parameterized transition system joining kernel, observation, compact-codec, and contract surfaces. \code{SessionKernel} is the canonical execution layer over a \code{Game}, carrying params, state, RNG, tick, history, and staged buffers. The AIXI-native single-agent environment described later is a derived front door available only when a designated player's interaction collapses to one external action token per cycle. This orientation still preserves the action-percept viewpoint used in the AIXI and MC-AIXI-CTW literature: reset first yields an initial percept, then on each later cycle the agent emits one action symbol and the environment replies with one percept symbol. But that viewpoint is a precise projection of the primary \code{Game} and session surface rather than the source of truth for the rest of the engine.
+
+\subsection{AIXI-native semantic core}
+
+Fix a parameter bundle and abbreviate the fields of \code{compact\_spec\_for(params)} by the names used below. Let
+\[
+L = \code{observation\_stream\_len},
+\qquad
+M = \code{max\_observation\_value()}.
+\]
+Then let the external action alphabet be
+\[
+\mathcal{A} = \{0,1,\dots,\code{action\_count}-1\}
+\]
+and let the compact observation and reward alphabets be
+\[
+\mathcal{O} = \{(w_0,\dots,w_{L-1}) \mid \forall i < L:\ 0 \le w_i \le M\},
+\qquad
+\mathcal{R} = \{r \in \mathbb{Z} \mid \code{min\_reward} \le r \le \code{max\_reward}\}.
+\]
+When $L=0$, the set $\mathcal{O}$ is the singleton empty tuple. The external percept alphabet is
+\[
+\mathcal{X} = \mathcal{O} \times \mathcal{R} \times \Bool,
+\]
+where the Boolean component is the terminal flag. An initialized action-percept history is therefore
+\[
+h \in \mathcal{X} \times (\mathcal{A} \times \mathcal{X})^* \cup \mathcal{X} \times (\mathcal{A} \times \mathcal{X})^* \times \mathcal{A}.
+\]
+Thus complete histories have the form
+\[
+(x_0,a_1,x_1,\dots,a_n,x_n),
+\]
+while pending histories have the form
+\[
+(x_0,a_1,x_1,\dots,a_n).
+\]
+
+A seeded environment law is a family of conditional probability functions
+\[
+\rho_n(x_{0:n} \mid a_{1:n})
+\]
+over percept prefixes conditioned on action prefixes, indexed by the number of executed external actions, satisfying
+\[
+\sum_{x_0 \in \mathcal{X}} \rho_0(x_0 \mid \epsilon) = 1
+\]
+and the chronological condition that for every $n \ge 1$,
+\[
+\forall a_{1:n}\ \forall x_{0:n-1}:\qquad
+\rho_{n-1}(x_{0:n-1} \mid a_{1:n-1}) = \sum_{x_n \in \mathcal{X}} \rho_n(x_{0:n} \mid a_{1:n}).
+\]
+Thus action $a_n$ cannot alter earlier percepts $x_{0:n-1}$. Reset first yields the initial percept $x_0$ and fixes the hidden initial condition; thereafter cycle $n$ consumes action token $a_n$ and emits percept token $x_n$.
+
+The derived agent-facing front door therefore exposes exactly one action channel and one percept channel. Reward and terminality are semantically components of the percept, not side channels. Spectator views, oracle world views, renderer state, multi-player coordination metadata, hidden-state handles, replay/history handles, and RNG internals are not part of this adapter interface.
+
+A public \code{ActionToken} is a checked symbol of the finite external action alphabet. Construction succeeds iff the encoded symbol lies in $\mathcal{A}$. In-alphabet actions are total: every \code{ActionToken} has environment semantics. If an underlying game realization distinguishes ``legal'' and ``illegal'' moves, that distinction must be resolved inside the transition law itself rather than by surfacing an agent-facing decode failure. Encoded integers outside $\mathcal{A}$ are not semantic actions and are rejected only at token-construction time. When \code{action\_count} is not a power of two, the fixed-width serialization defined later intentionally leaves some binary codewords unused; those codewords are precisely the out-of-alphabet integers and are not semantic actions.
+
+A public \code{Percept} is the canonical agent-visible history token. Compact observation bits, compact reward, decoded reward, and terminality must agree as one percept object. The compact layer later in this document fixes the exact encoding law for these percept components.
+
+Every conforming AIXI-native adapter must admit at least one canonical predictive description of the next-percept law given initialized action-percept history: either an exact finite-support law or a deterministic seeded generative law over the same finite alphabets. Proof and model layers may expose both, but the AIXI-native projection requires at least one such predictive semantics. The trait \code{AixiEnvironment} named later is the canonical single-agent adapter contract at this boundary; it is derived from the primary \code{Game} and session surface rather than replacing it. In particular, it is a black-box boundary: beyond explicit constructor/reset inputs and the emitted percept history, the caller receives no direct or indirect oracle for hidden state, future randomness, or host-side realization internals.
+
+\subsection{Kernel realization layer}
+
+A \code{GameKernel} provides associated types:
+\[
+\begin{aligned}
+&\code{Params},\ \code{State},\ \code{Action},\\
+&\code{PlayerBuf},\ \code{ActionBuf},\ \code{JointActionBuf},\ \code{RewardBuf}.
+\end{aligned}
+\]
+The buffer-associated types must implement the generic buffer contract with the stated item types.
+
+The exact kernel surface is:
+\begin{enumerate}
+  \item \code{name()} returns a stable machine-readable identifier.
+  \item \code{player\_count()} returns the total number of players.
+  \item \code{default\_params()} defaults to \code{Params::default()} unless overridden.
+  \item \code{params\_invariant(params)} defaults to \code{true} unless overridden.
+  \item \code{init\_with\_params(seed,params)} deterministically constructs the initial state.
+  \item \code{init(seed)} is \code{init\_with\_params(seed, default\_params())}.
+  \item \code{is\_terminal(state)} decides terminality.
+  \item \code{players\_to\_act(state,out)} writes the active players for the current tick into \code{out}.
+  \item \code{legal\_actions(state,player,out)} writes legal actions for that player.
+  \item \code{step\_in\_place(state,joint\_actions,rng,out)} mutates state and kernel outcome in place.
+\end{enumerate}
+
+Mathematically, \code{init\_with\_params}, \code{is\_terminal}, \code{players\_to\_act}, \code{legal\_actions}, and \code{step\_in\_place} determine the headless seeded transition kernel. No wall-clock quantity, renderer callback, network transport event, or UI pacing rule belongs to this layer.
+
+The player buffer written by \code{players\_to\_act(state,out)} must contain only player ids in $[0,\code{player\_count()})$ and must not repeat a player id. A joint-action buffer is \emph{well formed} iff each listed player id is in range and appears at most once. Omission of an otherwise active player is permitted only when the kernel's own transition law assigns semantics to that omission; otherwise callers must supply actions for all active players. The emitted reward buffer must likewise be well formed.
+
+A public \code{JointActionProfile} is a checked wrapper around a well-formed joint-action buffer. Curated front-door execution surfaces prefer this profile type or an equivalent checked constructor; raw slices and raw buffers are lower-level convenience forms only where this document says so explicitly.
+
+\subsection{Observation layer}
+
+An \code{ObservationModel} adds associated types
+\[
+\code{Obs},\qquad \code{WordBuf}.
+\]
+Its exact behavioral surface is:
+\begin{enumerate}
+  \item \code{observe\_player(state,player)} returns the player-scoped observation.
+  \item \code{observe\_spectator(state)} returns the spectator observation.
+  \item \code{encode\_player\_observation(obs,out)} writes the player-view compact observation stream.
+  \item \code{encode\_spectator\_observation(obs,out)} writes the spectator-view compact observation stream.
+\end{enumerate}
+There is exactly one canonical semantic observation type \code{Obs} per game. Player and spectator views are different values of that shared schema rather than different observation types.
+
+The helper \code{encode\_player\_view(state,player,out)} first computes the player observation, then encodes it with \code{encode\_player\_observation}.
+
+\subsection{Oracle/debug projection}
+
+An \code{OracleProjection} is an additive layer with associated type
+\[
+\code{WorldView}.
+\]
+Its method \code{world\_view(state)} returns the oracle/debug projection derived solely from state. Its predicate \code{world\_view\_invariant(state,world)} defaults to \code{true} unless overridden. The oracle/debug projection is not part of the AIXI-native percept law and exists for debug inspection, official oracle presentation profiles, and proof refinement surfaces only.
+
+\subsection{Compact codec layer}
+
+The compact surface is parameterized by the game parameter bundle. The convenience \code{compact\_spec()} means \code{compact\_spec\_for(default\_params())}. Session-level uses of the compact spec instead refer to the current session params. Default compact behavior, unless overridden, is parameter-independent and is:
+\[
+\begin{aligned}
+\code{action\_count}&=0, & \code{observation\_bits}&=0, & \code{observation\_stream\_len}&=0,\\
+\code{reward\_bits}&=1, & \code{min\_reward}&=0, & \code{max\_reward}&=0,\\
+\multicolumn{6}{l}{\code{reward\_offset}=0.}
+\end{aligned}
+\]
+The default action encoder returns $0$; the default decoder returns \code{None}; the default observation encoders clear the output word buffer.
+
+The helper \code{decode\_action\_checked(encoded)} returns the decoded action or
+\code{InvalidActionEncoding\{encoded\}}.
+
+The helper \code{compact\_invariant\_for(params,words)} means exactly that
+\[
+\code{self.compact\_spec\_for(params).validate\_observation\_words(words.as\_slice())}
+\]
+succeeds. The convenience helper \code{compact\_invariant(words)} means \code{compact\_invariant\_for(default\_params(),words)}.
+
+\subsection{AIXI front-door validity}
+
+A realization may be exposed through \code{AixiEnvironment} for a designated agent player only when, for the current parameter bundle, all of the following hold:
+\begin{enumerate}
+  \item \code{reward\_range\_is\_sound()} is true and \code{try\_encode\_reward(0)} succeeds, equivalently $0 \in \mathcal{R}$;
+  \item for every encoded symbol $e \in \mathcal{A}$ there exists a unique action $a_e$ such that \code{decode\_action(e)} = \code{Some}$(a_e)$, \code{encode\_action}$(a_e) = e$, and \code{action\_invariant}$(a_e)$ holds;
+  \item for every reachable initialized action-percept history and every token $e \in \mathcal{A}$, the next-step law for token $e$ is defined; any non-designated-player actions, simultaneous-move resolution, or stochastic tie-breaking are internal to that law and require no additional external action input;
+  \item every reachable designated-player observation produced at reset or after a step encodes to a word stream satisfying \code{compact\_invariant\_for(params,words)};
+  \item the exposed adapter surface provides no direct or indirect access to the underlying session, hidden runtime state, RNG seed/state/stream structure, replay/history internals, or oracle/debug projections beyond what is reconstructible from the explicit constructor/reset inputs and the emitted percept history.
+\end{enumerate}
+Only realizations satisfying these obligations count as AIXI-native environments in this document.
+
+\subsection{Contract layer}
+
+Default contract hooks on \code{ContractSurface} all return \code{true} unless overridden:
+\begin{itemize}
+  \item \code{state\_invariant}
+  \item \code{action\_invariant}
+  \item \code{player\_observation\_invariant}
+  \item \code{spectator\_observation\_invariant}
+  \item \code{oracle\_world\_view\_invariant}
+  \item \code{transition\_postcondition}
+\end{itemize}
+The oracle-bridge law is:
+\[
+\code{oracle\_world\_view\_invariant(state)}
+=
+\code{world\_view\_invariant(state, world\_view(state))}
+\]
+for games that implement \code{OracleProjection}. Games without \code{OracleProjection} may use the default-\code{true} bridge hook.
+
+\subsection{Convenience front doors}
+
+A \code{Game} is the curated authoring and execution umbrella trait joining
+\[
+\code{GameKernel} + \code{ObservationModel} + \code{CompactCodec} + \code{ContractSurface}.
+\]
+It is the primary semantic contract of the engine. \code{SessionKernel}, history stores, policies, renderers, and proof/model adapters are all defined over a \code{Game}. It does not by itself imply \code{OracleProjection}. A game/session realization may additionally expose the canonical AIXI-native environment only when the admissibility conditions above hold for some designated agent player and no additional external action input is required beyond that player's action token. Under those conditions, the AIXI front door described later is a canonical single-agent projection of the same \code{Game}, not a higher-priority replacement for the \code{Game} and session surface. Multi-player kernels and oracle-capable sessions remain first-class public realizations.
+
+\code{max\_players()} equals the compile-time capacity of \code{PlayerBuf}. The helper \code{is\_action\_legal(state,player,action)} enumerates legal actions into a temporary action buffer and checks membership by equality scan.
+
+\section{Single-player lifting}
+
+The constant acting player id is
+\[
+\code{SOLO\_PLAYER} = 0.
+\]
+The canonical buffer aliases are:
+\begin{itemize}
+  \item \code{SinglePlayerBuf = FixedVec<PlayerId,1>}
+  \item \code{SinglePlayerJointActionBuf<A> = FixedVec<PlayerAction<A>,1>}
+  \item \code{SinglePlayerRewardBuf = FixedVec<PlayerReward,1>}
+\end{itemize}
+
+The exact helper laws are:
+\begin{align*}
+\code{can\_act(player,terminal)} &\iff (\code{player}=0 \land \neg\code{terminal}), \\
+\code{write\_players\_to\_act(out,terminal)} &: \code{clear(out)};\ \text{if } \neg\code{terminal}\text{ then push }0, \\
+\code{first\_action(joint\_actions)} &: \text{returns the first action whose player field is }0,\\
+\code{push\_reward(out,reward)} &: \text{push }(0,\code{reward}).
+\end{align*}
+Under the joint-action well-formedness contract, there is at most one such player-$0$ action.
+
+A \code{SinglePlayerGame} is lifted to a full \code{Game} by the exact adapter:
+\begin{itemize}
+  \item \code{player\_count()} is $1$,
+  \item \code{players\_to\_act} is \code{write\_players\_to\_act(out,is\_terminal(state))},
+  \item \code{legal\_actions} returns the single-player legal set iff \code{can\_act(player,is\_terminal(state))}, else the empty set,
+  \item \code{observe\_player} ignores the supplied player id,
+  \item \code{step\_in\_place} passes \code{first\_action(joint\_actions)} to the single-player implementation,
+  \item all invariant and compact methods are forwarded verbatim.
+\end{itemize}
+
+\section{Observation adapter}
+
+\code{Observer} is exactly:
+\[
+\code{Observer} ::= \code{Player(PlayerId)} \mid \code{Spectator}.
+\]
+This viewpoint selector is an additive observation utility. It is not part of the AIXI-native agent adapter, whose percept channel is fixed to the designated agent player.
+
+For any \code{Game}, the blanket \code{Observe} implementation satisfies:
+\begin{align*}
+\code{observe(state,Player(p))} &= \code{observe\_player(state,p)}, \\
+\code{observe(state,Spectator)} &= \code{observe\_spectator(state)}, \\
+\code{encode\_observation(obs,out)} &= \code{encode\_player\_observation(obs,out)}, \\
+\code{encode\_observation\_for(Player(\_),obs,out)} &= \code{encode\_player\_observation(obs,out)}, \\
+\code{encode\_observation\_for(Spectator,obs,out)} &= \code{encode\_spectator\_observation(obs,out)}.
+\end{align*}
+The convenience method \code{observe\_and\_encode} first observes, then encodes with the viewpoint-sensitive encoder.
+
+\section{Policy layer}
+
+A \code{Policy<G>} chooses one legal action from the legal action slice. The concrete policies are exact:
+\begin{itemize}
+  \item \code{FirstLegalPolicy}: returns the first legal action, panicking if none exist.
+  \item \code{RandomPolicy}: samples a uniform random index with \code{rng.gen\_range(legal\_actions.len())} and returns that action.
+  \item \code{ScriptedPolicy}: stores \code{script: Vec<A>}, \code{position: usize}, \code{strict: bool}. On each query:
+  \begin{enumerate}
+    \item if a scripted action exists at the current position, increment position;
+    \item if that action is legal, return it;
+    \item if it is illegal and \code{strict=true}, panic with message \code{"strict scripted policy action at index i is illegal for current state"};
+    \item if no scripted action exists and \code{strict=true}, panic with message \code{"strict scripted policy exhausted at index i"};
+    \item otherwise fall back to the first legal action.
+  \end{enumerate}
+  \item \code{FnPolicy}: delegates selection to the stored closure.
+\end{itemize}
+
+\section{Verification helpers and stepping wrappers}
+
+The helper \code{reward\_and\_terminal\_postcondition(reward,min,max,post\_terminal,kernel\_outcome\_terminal)}
+returns \code{true} iff
+\[
+\code{min <= reward <= max}
+\qquad\text{and}\qquad
+\code{post\_terminal = kernel\_outcome\_terminal}.
+\]
+
+The helper \code{assert\_transition\_contracts(game,pre,actions,seed)} performs the following:
+\begin{enumerate}
+  \item assert the pre-state invariant and every action invariant,
+  \item clone the pre-state twice,
+  \item initialize two RNGs from \code{DeterministicRng::from\_seed\_and\_stream(seed,99)},
+  \item step both copies once with fresh default kernel outcomes,
+  \item assert equality of both successor states, both kernel outcomes, and both RNGs,
+  \item assert the post-state invariant and the transition postcondition on the left successor.
+\end{enumerate}
+
+The helper \code{assert\_observation\_contracts(game,state)} asserts the state invariant,
+every player observation invariant for players $0$ through \code{player\_count()-1}, the
+spectator observation invariant, and \code{oracle\_world\_view\_invariant(state)}. For games
+implementing \code{OracleProjection}, this bridge must equal
+\code{world\_view\_invariant(state, world\_view(state))}.
+
+The helper \code{assert\_compact\_roundtrip(game,params,action)} returns immediately when
+\code{game.compact\_spec\_for(params).action\_count = 0}. Otherwise it encodes the action and asserts
+that decoding that value returns exactly the original action.
+
+The wrapper \code{KernelStepper(session)} stores a mutable session reference and
+\code{step(actions)} is exactly \code{session.step\_with\_joint\_actions(actions)}.
+The wrapper \code{CheckedStepper(session)} is analogous, but \code{step(actions)} is exactly
+\code{session.step\_with\_joint\_actions\_checked(actions)}.
+
+\section{Session kernel and history semantics}
+
+\subsection{History snapshots}
+
+A \code{HistorySnapshot<S>} is the triple
+\[
+(\code{tick},\ \code{state},\ \code{rng}).
+\]
+
+\subsection{History stores}
+
+A history store over game $G$ supports initialization from the initial state, reset, recording of one executed transition as a \code{SessionStepRecord}, retrieval of current length and trace, ownership conversion into a trace, and restoration of the pair $(\code{state},\code{rng})$ at a target tick when restorable.
+
+\subsection{Dynamic history}
+
+\code{DynamicHistory<G,SNAPSHOTS,SNAP\_EVERY>} stores:
+\begin{itemize}
+  \item the session seed,
+  \item the initial state,
+  \item the initial RNG,
+  \item a dynamic replay trace,
+  \item a deque of at most \code{SNAPSHOTS} snapshots.
+\end{itemize}
+If \code{SNAPSHOTS > 0}, construction inserts the initial snapshot at tick $0$.
+
+A snapshot at tick $t$ is stored during record iff:
+\[
+\code{SNAPSHOTS} > 0,\quad \code{SNAP\_EVERY} > 0,\quad t \equiv 0 \pmod{\code{SNAP\_EVERY}}.
+\]
+If the deque is full, the oldest snapshot is dropped first. The best snapshot for a target tick is the stored snapshot of maximal tick not exceeding that target.
+
+Dynamic restore to target tick $T$ succeeds iff $T \le \code{trace.len()}$. It reconstructs from the best snapshot at or before $T$, or from the initial state and initial RNG if no such snapshot exists, and then replays recorded session step records in ascending order starting from index \code{start\_tick} while \code{record.tick <= T}. Each replay call invokes \code{game.step\_in\_place} with the recorded joint actions. The reconstructed pair $(state,rng)$ is returned.
+
+\subsection{Fixed history}
+
+\code{FixedHistory<G,LOG,SNAPSHOTS,SNAP\_EVERY>} stores:
+\begin{itemize}
+  \item the session seed,
+  \item the initial state,
+  \item the initial RNG,
+  \item a fixed replay trace with log capacity \code{LOG},
+  \item an array of exactly \code{SNAPSHOTS} snapshots,
+  \item \code{snapshot\_count}.
+\end{itemize}
+
+Snapshot storage conditions are the same, but the slot used for a nonzero snapshot tick $t$ is
+\[
+\left(\frac{t}{\code{SNAP\_EVERY}} - 1\right) \bmod \code{SNAPSHOTS}.
+\]
+In normal session-driven use, this formula is applied only to positive post-step ticks. Tick $0$ is represented separately by the initial snapshot inserted at construction or reset, and session stepping increments the tick before recording.
+The best snapshot is the stored snapshot with maximal tick not exceeding the target among the first \code{snapshot\_count} array entries. Fixed restore is otherwise identical to dynamic restore.
+
+\subsection{Session state}
+
+A \code{SessionKernel<G,H>} stores:
+\[
+\begin{aligned}
+(&\code{game},\code{params},\code{state},\code{rng},\code{tick},\code{history},\\
+ &\code{players\_to\_act},\code{legal\_actions},\code{joint\_actions},\code{kernel\_outcome}).
+\end{aligned}
+\]
+The aliases are:
+\begin{itemize}
+  \item \code{Session<G> = SessionKernel<G, DynamicHistory<G,512,8>>}
+  \item \code{InteractiveSession<G> = SessionKernel<G, DynamicHistory<G,128,8>>}
+\end{itemize}
+
+Construction by \code{new(game,seed)} is \code{new\_with\_params(game,seed,game.default\_params())}. Construction with explicit params asserts \code{game.params\_invariant(params)}, initializes state via \code{game.init\_with\_params}, asserts the state invariant, sets the RNG to \code{DeterministicRng::from\_seed\_and\_stream(seed,1)}, initializes history from that state and RNG, and sets tick to $0$.
+
+Reset with explicit params asserts \code{game.params\_invariant(params)}, reinitializes params and state via \code{game.init\_with\_params}, asserts the resulting \code{state\_invariant}, sets the RNG to \code{DeterministicRng::from\_seed\_and\_stream(seed,1)}, sets tick to $0$, resets history to the new initial state and RNG, clears all staging buffers, and clears the kernel outcome.
+
+The exact accessors expose the current game, params, state, tick, RNG, compact spec for current params, trace, terminality, player observation, spectator observation, and world view. The ownership-consuming accessor \code{into\_trace()} returns the history trace by value. The mutable query \code{legal\_actions\_for(player)} overwrites the internal legal-action buffer with the legal actions for that player in the current state and returns the populated slice. These are trusted host-side realization accessors. A conforming \code{AixiEnvironment} may be implemented atop a \code{SessionKernel}, but it must not re-export these accessors directly or indirectly to the player.
+\subsection{Stepping semantics}
+
+\code{step\_core(actions)}:
+\begin{enumerate}
+  \item asserts the current state is nonterminal,
+  \item clears the cached kernel outcome,
+  \item calls \code{game.step\_in\_place(state,actions,rng,kernel\_outcome)},
+  \item increments \code{tick}.
+\end{enumerate}
+
+\code{record\_step(actions)} records the current tick together with clones of the joint actions and cached kernel outcome into history, and stores a snapshot when the history policy requires one.
+
+\code{step(actions: \&[PlayerAction])} copies the supplied slice into the internal joint-action buffer and then executes the staged step path. \code{step\_with\_joint\_actions(actions)} directly executes \code{step\_core(actions)} followed by \code{record\_step(actions)}.
+
+The checked variants additionally enforce, in this exact order:
+\begin{enumerate}
+  \item pre-state invariant,
+  \item every action invariant,
+  \item after stepping: post-state invariant,
+  \item spectator observation invariant,
+  \item oracle-world bridge invariant \code{oracle\_world\_view\_invariant(state)} (and for \code{G: OracleProjection}, this equals \code{world\_view\_invariant(state, world\_view(state))}),
+  \item every player observation invariant for players $0$ through \code{player\_count()-1},
+  \item transition postcondition.
+\end{enumerate}
+Then they record the step.
+
+\subsection{Policy-driven stepping}
+
+\code{collect\_policy\_actions(policies)} computes active players from the game, then for each active player in the order emitted by \code{players\_to\_act}:
+\begin{enumerate}
+  \item compute legal actions,
+  \item compute the player's observation,
+  \item choose the policy at index equal to the player id,
+  \item request an action from that policy,
+  \item push \code{PlayerAction\{player,action\}} into the joint-action buffer.
+\end{enumerate}
+If a policy is missing for an active player, the session panics with \code{"missing policy for active player"}.
+
+\code{step\_with\_policies} performs \code{collect\_policy\_actions} followed by the staged step. The checked version uses the checked staged step.
+
+\code{run\_until\_terminal(policies,max\_ticks)} repeatedly performs policy steps while the state is nonterminal and \code{tick < max\_ticks}. The checked form is analogous.
+
+\subsection{Rewind, replay, state-at, fork}
+
+\code{rewind\_to(target\_tick)} queries the history store restore function. On success it overwrites state, RNG, and tick with the restored values and target tick, clears the cached kernel outcome, and returns \code{true}; on failure it returns \code{false}. \code{replay\_to} is an alias of \code{rewind\_to}. \code{state\_at(target\_tick)} returns the restored state alone. \code{fork\_at(target\_tick)} clones the session, rewinds the clone, and returns that clone on success.
+
+\section{AIXI-native environment adapter}
+
+A \code{BitPacket<MAX\_WORDS>} stores a \code{FixedVec<u64,MAX\_WORDS>}. The packet operations are exact projection of the currently populated word slice, explicit clearing, and internal push with panic on overflow.
+
+A \code{CompactReward} stores both raw reward and compactly encoded reward.
+
+An \code{ActionToken} is a checked external action symbol. Relative to the current compact spec, construction succeeds iff the encoded symbol lies in $[0,\code{action\_count})$. The external action alphabet of the AIXI-native front door is exactly the set of such tokens.
+
+A \code{Percept<MAX\_WORDS>} stores:
+\[
+(\code{observation\_bits},\code{reward},\code{terminated}),
+\]
+where \code{reward} is a \code{CompactReward}. Mathematically this record is one percept token: its observation packet is an element of $\mathcal{O}$, its raw reward is an element of $\mathcal{R}$, its encoded reward is exactly the compact encoding of that raw reward, and there is no separate truncation flag in the AIXI-native core.
+
+\code{ActionTokenError} is exactly:
+\begin{itemize}
+  \item \code{OutOfAlphabet\{encoded,action\_count\}}
+\end{itemize}
+
+\code{EnvError} variants are exactly:
+\begin{itemize}
+  \item \code{SessionTerminated}
+  \item \code{ObservationOverflow\{actual\_words,max\_words\}}
+  \item \code{InvalidObservationEncoding\{reason\}}
+  \item \code{RewardOutOfRange\{reward,min,max\}}
+  \item \code{InvalidRewardEncoding\{reason\}}
+  \item \code{InvalidParameters\{game\}}
+\end{itemize}
+
+An \code{Environment<G,H,MAX\_WORDS>} stores a session and an immutable \code{agent\_player}. This surface is the reference single-agent adapter built from game/session components for one designated player. The stored session is encapsulated host-side realization state, not part of the adapter's public observation surface. The adapter is well defined only when the current realization satisfies the AIXI front-door validity conditions above. Its percept channel is always that designated player's canonical player observation together with that same player's scalar reward and terminal flag. Spectator views and oracle world views remain outside this surface. Construction with explicit params first validates \code{params\_invariant} and validates the chosen \code{agent\_player} lies in $[0,\code{player\_count()})$.
+
+The trait \code{AixiEnvironment<MAX\_WORDS>} exposes the exact methods \code{reset\_seed(seed)}, \code{reset\_seed\_with\_params(seed,params)}, and \code{step(action)} where \code{action} is an \code{ActionToken}. This is the canonical single-agent adapter contract, not the architecturally primary game/session contract. It is intentionally minimal: the adapter may reveal only what follows from explicit caller-supplied setup inputs together with the returned percept history. The historical name \code{InfotheoryEnvironment<MAX\_WORDS>} is a compatibility alias of this same contract. The alias \code{DefaultEnvironment<G,MAX\_WORDS>} is exactly \code{Environment<G, DynamicHistory<G,512,8>, MAX\_WORDS>}.
+
+For \code{BitPacket}, the method \code{words()} returns the currently populated slice and \code{clear()} empties it.
+
+The concrete \code{Environment} exposes no \code{session()}, \code{session\_mut()}, state, RNG, trace, history, or oracle-view accessors. Its only additional public accessor is \code{agent\_player()}, which returns the designated acting player. A conforming implementation shall not expose through \code{AixiEnvironment} or \code{Environment} any direct or indirect handle by which the caller can inspect, clone, fork, or mutate the underlying session, hidden state, RNG internals, replay buffers, or debug/oracle projections. If a host intentionally wants such an oracle/debug surface, it must be a separate explicit API outside \code{AixiEnvironment}; it is opt-in host tooling, not part of the black-box agent contract.
+
+The reset operations \code{reset(seed)} and \code{reset\_with\_params(seed,params)} first reset the underlying session, then return the current designated-player percept as the initial percept $x_0$, with reward exactly $0$, corresponding compact encoding, and terminality equal to the reset state. This zero-reward initial-percept law is part of AIXI front-door validity rather than an incidental convention. The explicit-params form first validates \code{params\_invariant} and otherwise returns \code{InvalidParameters}.
+
+The exact environment step law on checked action token $a$ is:
+\begin{enumerate}
+  \item if the session is terminal, return \code{SessionTerminated};
+  \item decode $a$ via the game compact decoder; by the AIXI front-door validity law this succeeds with the uniquely corresponding underlying action, so failure here is a violated compact-spec contract rather than a recoverable agent input error;
+  \item build a one-element joint action buffer containing exactly the designated agent player's action;
+  \item if the underlying game distinguishes legal and illegal moves, apply its declared total in-alphabet action semantics; rejecting an in-alphabet action at the AIXI adapter boundary is forbidden;
+  \item step the underlying session with those joint actions;
+  \item extract the reward for the designated agent player;
+  \item encode that reward through the current compact spec;
+  \item if encoding fails with \code{RewardOutOfRange}, map to \code{EnvError::RewardOutOfRange} using the spec bounds; otherwise map to \code{InvalidRewardEncoding};
+  \item encode the current designated-player observation; reject packet overflow or schema-invalid observation words;
+  \item return the percept token consisting of the observation packet, the raw and encoded reward, and the step terminality.
+\end{enumerate}
+
+The compatibility helper \code{step\_bits(encoded)} first constructs an \code{ActionToken} and then delegates to \code{step(action)}.
+
+Only realizations in which one designated player action per environment cycle is sufficient, and in which hidden state and randomness remain encapsulated behind the action-percept interface, may be exposed through this adapter. If an underlying kernel requires additional externally supplied simultaneous actions, or if the adapter leaks hidden realization data beyond the black-box contract above, it is not itself an \code{AixiEnvironment} until those issues are internalized or removed from the environment law.
+
+The percept encoder rejects encoded observations longer than \code{MAX\_WORDS}, validates them against the compact spec, and then copies them into a bounded packet.
+
+\subsection{Canonical history serialization}
+
+For any width $w \in \Nat$ and value $v \in [0,2^w)$, let
+\[
+\operatorname{bits}_w(v) = b_0 b_1 \dots b_{w-1}
+\]
+be the unique length-$w$ bitstring satisfying
+\[
+v = \sum_{i=0}^{w-1} b_i 2^i,
+\qquad b_i \in \{0,1\}.
+\]
+Thus fixed-width fields serialize least-significant-bit first, and width $0$ contributes the empty bitstring.
+
+If an \code{ActionToken} carries encoded symbol $a$, its canonical bit serialization is
+\[
+\operatorname{ser}(a) = \operatorname{bits}_{\code{action\_bits}}(a).
+\]
+
+If a percept carries observation words $(w_0,\dots,w_{L-1})$ in increasing packet index order, where $L = \code{observation\_stream\_len}$, its canonical observation-bit serialization is
+\[
+\operatorname{ser}_{\mathcal{O}} = \operatorname{bits}_{\code{observation\_word\_bits}}(w_0)\cdots\operatorname{bits}_{\code{observation\_word\_bits}}(w_{L-1}).
+\]
+If the compact reward encoding stored in the percept is $r_e$, its canonical reward-bit serialization is
+\[
+\operatorname{ser}_{\mathcal{R}} = \operatorname{bits}_{\code{reward\_word\_bits}}(r_e).
+\]
+Let \code{bit(false)} $= 0$ and \code{bit(true)} $= 1$. Then the canonical percept serialization is
+\[
+\operatorname{ser}(x) = \operatorname{ser}_{\mathcal{O}}\,\operatorname{ser}_{\mathcal{R}}\,\code{bit(t)},
+\]
+where $t$ is the percept's terminal flag.
+
+For a complete initialized history
+\[
+(x_0,a_1,x_1,a_2,x_2,\dots,a_n,x_n),
+\]
+the canonical external history bitstream is
+\[
+\operatorname{ser}(x_0)\operatorname{ser}(a_1)\operatorname{ser}(x_1)\operatorname{ser}(a_2)\operatorname{ser}(x_2)\cdots\operatorname{ser}(a_n)\operatorname{ser}(x_n).
+\]
+For a pending initialized history ending in an action token,
+\[
+(x_0,a_1,x_1,\dots,a_n),
+\]
+the serialization is the same concatenation truncated after $\operatorname{ser}(a_n)$. In particular, the reset percept contributes the prefix $\operatorname{ser}(x_0)$ before any action bits appear. This bitstream, rather than the incidental \code{u64}-packet transport view, is the canonical external history object for binary predictors such as FAC-CTW.
+
+\section{Physics world}
+
+This section exists only when feature \code{physics} is enabled.
+
+\subsection{Body kinds and bodies}
+
+\code{BodyKind} is exactly \code{Static}, \code{Kinematic}, or \code{Trigger}. A \code{PhysicsBody2d} is the record
+\[
+(\code{id},\code{kind},\code{position},\code{half\_extents},\code{active}).
+\]
+Its AABB is
+\[
+[\code{position}-\code{half\_extents},\ \code{position}+\code{half\_extents}].
+\]
+Its invariant is finite position and half-extents together with nonnegative half-extents.
+
+\subsection{Contacts and worlds}
+
+A \code{Contact2d} stores a sorted pair of body ids $(a,b)$ with the intended law $a<b$.
+
+A \code{PhysicsWorld2d<BODIES,CONTACTS>} stores world bounds, a fixed vector of bodies, a fixed vector of contacts, and a simulation tick.
+
+World invariants are exactly:
+\begin{enumerate}
+  \item every bound coordinate is finite,
+  \item bounds satisfy \code{min.x <= max.x} and \code{min.y <= max.y},
+  \item each body satisfies its body invariant,
+  \item body ids are strictly increasing in storage order,
+  \item every body AABB lies within bounds,
+  \item every contact satisfies \code{a < b}.
+\end{enumerate}
+
+Adding a body requires ascending id order and panics otherwise. After adding or moving a body, clamping is exact: if body half-extents are $h_x,h_y$ and bounds are $[m_x,M_x]\times[m_y,M_y]$, then the center is clamped to
+\[
+[m_x+h_x,\ M_x-h_x] \times [m_y+h_y,\ M_y-h_y].
+\]
+
+Setting body activity or position has both deferred and eager versions; eager versions refresh contacts afterward. Translating a body adds the delta and reclamps.
+
+\code{step()} increments the world tick by $1$ and refreshes contacts.
+
+\code{has\_contact(a,b)} normalizes the id pair into sorted order and linearly scans the cached contact list.
+
+\subsection{Contact refresh algorithm}
+
+Let \code{intersects(left,right)} mean inclusive AABB overlap:
+\[
+\ell_{\min x}\le r_{\max x} \land \ell_{\max x}\ge r_{\min x} \land \ell_{\min y}\le r_{\max y} \land \ell_{\max y}\ge r_{\min y}.
+\]
+
+When the number of bodies is at most $12$, contact refresh computes AABBs for active bodies, enumerates every active pair, and appends a contact for each intersecting pair in increasing storage-pair order.
+
+When the number of bodies exceeds $12$, refresh performs sweep-and-prune on $x$ intervals:
+\begin{enumerate}
+  \item compute AABBs and $(\min_x,\max_x)$ for all active bodies,
+  \item sort active indices by increasing \code{min\_x}, breaking ties by smaller body id,
+  \item maintain an active list filtered to bodies whose \code{max\_x >= current min\_x},
+  \item test the current body against all bodies still in the active list using full AABB intersection,
+  \item append each intersection as a sorted contact pair,
+  \item after all insertions, sort the contact vector by key \code{(a,b)}.
+\end{enumerate}
+\subsection{Trigger helpers}
+
+\code{set\_trigger\_mask\_deferred(world,first\_trigger\_id,trigger\_count,active\_mask)} requires \code{trigger\_count <= 64}. For each index $i$ in $[0,\code{trigger\_count})$ it sets body \code{first\_trigger\_id+i} active iff bit $i$ of \code{active\_mask} is $1$.
+
+\code{collect\_actor\_trigger\_contacts(world,actor\_id,first\_trigger\_id,trigger\_count,remaining\_mask)} also requires \code{trigger\_count <= 64}. For each trigger bit still present in \code{remaining\_mask}, if the world has contact between the actor and that trigger body, the helper clears the bit in \code{remaining\_mask} and increments the collected count. It does \emph{not} mutate body activity or refresh contacts during the scan. Caller-visible trigger activity is updated afterward in one batch. It returns the number of collected triggers as \code{u8}.
+
+\section{Builtin game registry}
+
+This section exists only when feature \code{builtin} is enabled.
+
+A \code{PolicyDescriptor} is \code{\{name, description\}}. A \code{ControlMap} is \code{\{prompt\}}. A \code{GameDescriptor} stores:
+\begin{itemize}
+  \item stable external game name,
+  \item when feature \code{cli} is enabled, a runner callback,
+  \item optional controls metadata,
+  \item \code{default\_renderer: bool},
+  \item \code{physics\_renderer: bool},
+  \item a static slice of supported policy descriptors.
+\end{itemize}
+
+The standard policies slice is exactly:
+\begin{enumerate}
+  \item \code{"human"}: interactive stdin policy
+  \item \code{"random"}: uniform random legal actions
+  \item \code{"first"}: always pick the first legal action
+  \item \code{"script:<a,b,c>"}: comma-separated deterministic action script
+\end{enumerate}
+
+The control prompts are exact:
+\begin{itemize}
+  \item tic-tac-toe: \code{"choose move [0-8]"}
+  \item blackjack: \code{"choose action [hit/stand]"}
+  \item platformer (only with \code{physics}): \code{"choose action [stay/left/right/jump]"}
+\end{itemize}
+
+If feature \code{physics} is disabled, \code{all\_games()} returns descriptors for exactly \code{tictactoe} and \code{blackjack}. If \code{physics} is enabled, it returns those two plus \code{platformer}. For \code{tictactoe} and \code{blackjack}, \code{default\_renderer = cfg!(feature="render")} and \code{physics\_renderer = false}. For \code{platformer}, both renderer flags are \code{cfg!(feature="render")}. \code{find\_game(name)} scans \code{all\_games()} by exact name equality.
+
+Builtin games may choose identical concrete representations for state, observations, and oracle world view when that is semantically exact. Such coincidences are properties of those concrete games, not architectural requirements of the engine or of the AIXI-native front door.
+
+\section{Builtin game: TicTacToe}
+
+\subsection{Datatypes}
+
+The cell alphabet is
+\[
+\code{Empty},\ \code{Player},\ \code{Opponent}.
+\]
+An action is \code{TicTacToeAction(u8)}. State, player observation, and world view are all the same record
+\[
+(\code{board}:[9]\to\code{Cell},\ \code{terminal}:\Bool,\ \code{winner}:\operatorname{Option}(\code{PlayerId})).
+\]
+The builtin game value is the unit struct \code{TicTacToe}.
+
+The win lines are exactly:
+\[
+(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6).
+\]
+
+\subsection{State laws}
+
+\code{find\_winner(board)} returns \code{Some(0)} iff some win line is all \code{Player}; it returns \code{Some(1)} iff some win line is all \code{Opponent}; otherwise \code{None}.
+
+\code{is\_full(board)} means no cell is \code{Empty}.
+
+\code{action\_is\_legal(state,index)} means $0 \le \code{index} < 9$ and the chosen board cell is empty.
+
+\code{apply\_mark(state,index,mark)} writes the mark into the board, recomputes the winner, and if either a winner exists or the board is full it sets \code{terminal := true}, \code{winner := computed winner}, and returns \code{Some(winner)}; otherwise it returns \code{None}.
+
+\code{sample\_opponent\_action(state,rng)} enumerates empty cell indices in ascending order into a temporary array and returns one chosen uniformly by \code{rng.gen\_range(empty\_len)}.
+
+The terminal reward function is exact:
+\[
+\operatorname{reward\_from\_terminal\_winner}(w)=
+\begin{cases}
+2, & w=\code{Some}(0),\\
+-2, & w=\code{Some}(p),\ p\ne 0,\\
+1, & w=\code{None}.
+\end{cases}
+\]
+
+\subsection{Transition law}
+
+The exact single-player transition law \code{model\_step(state,action,rng)} is:
+\begin{enumerate}
+  \item if \code{state.terminal}, return reward $0$ and leave the state unchanged;
+  \item decode the optional action to an index if present;
+  \item if the action is absent, out of range, or illegal, return reward $-3$ and leave the state unchanged;
+  \item otherwise place the player's mark at that cell;
+  \item if that ends the game, return the terminal reward;
+  \item otherwise sample a uniformly random opponent move among currently empty cells and apply it;
+  \item if that ends the game, return the corresponding terminal reward;
+  \item otherwise return reward $0$.
+\end{enumerate}
+
+Termination is \code{Terminal\{winner\}} when \code{state.terminal=true}, and \code{Ongoing} otherwise.
+\subsection{Runtime trait implementation}
+
+The exact trait data are:
+\begin{itemize}
+  \item name: \code{"tictactoe"}
+  \item params: unit
+  \item initial state: default empty board, nonterminal, no winner
+  \item terminality: \code{state.terminal}
+  \item legal actions: all empty cell indices in ascending order, unless terminal
+  \item player observation and world view: the full state value
+\end{itemize}
+
+The compact spec is exactly
+\[
+(9,18,1,3,-3,2,3).
+\]
+Thus action encodings are integers $0$ through $8$, the observation is one 18-bit word, and encoded rewards occupy 3 bits representing the range $[-3,2]$ by adding offset $3$.
+
+Action encoding and decoding are:
+\[
+\code{encode\_action(TicTacToeAction(i))}=i,
+\qquad
+\code{decode\_action(x)}=\begin{cases}
+\operatorname{Some}\!\bigl(\code{TicTacToeAction}(x)\bigr), & x<9,\\
+\code{None}, & \text{otherwise}.
+\end{cases}
+\]
+
+The packed board encoder uses two bits per cell in index order:
+\[
+\code{Empty}\mapsto 0,\quad \code{Player}\mapsto 1,\quad \code{Opponent}\mapsto 2,
+\]
+with cell $i$ occupying bits $2i$ and $2i+1$.
+
+The state invariant is exact:
+\[
+\code{state.terminal} \iff (\operatorname{winner}(board)\neq\varnothing \lor \operatorname{full}(board)),
+\]
+and \code{state.winner} must equal the winner found from the board, or both must be \code{None}.
+
+The action invariant is \code{action.0 < 9}.
+
+The transition postcondition is:
+\begin{itemize}
+  \item if the pre-state is terminal, then post-state equals pre-state, reward-for-player-$0$ is $0$, and the kernel outcome is terminal;
+  \item otherwise reward-for-player-$0$ lies in $[-3,2]$ and kernel outcome terminality equals post-state terminality.
+\end{itemize}
+
+\subsection{Model and proof witnesses}
+
+The executable proof model is identical to the runtime semantics: model state, observation, and world view are the same runtime datatypes; model init, legal actions, observations, and step semantics are extensionally equal to runtime behavior; the refinement witness is the identity map on states, observations, and world views.
+
+The termination witness rank is the number of empty cells in a nonterminal state and $0$ in a terminal state.
+
+The probabilistic support witness is exact:
+\begin{itemize}
+  \item if the state is terminal, the finite support is a singleton outcome with unchanged state, reward $0$, and weight $1$;
+  \item if the action is absent or illegal, the finite support is the singleton unchanged state with reward $-3$ and weight $1$;
+  \item if the player's move itself terminates the game, the support is the singleton resulting state with corresponding terminal reward and weight $1$;
+  \item otherwise each possible opponent move on an empty square yields one support point of weight $1$.
+\end{itemize}
+
+\section{Builtin game: Blackjack}
+
+\subsection{Datatypes and constants}
+
+Constants are exact:
+\[
+\code{MAX\_HAND\_CARDS}=12,
+\qquad
+\code{DECK\_SIZE}=52,
+\qquad
+\code{BLACKJACK\_ACTION\_ORDER}=[\code{Hit},\code{Stand}].
+\]
+
+The action set is \code{Hit} or \code{Stand}. The phase set is \code{PlayerTurn}, \code{OpponentTurn}, or \code{Terminal}.
+
+A hand value is the record \code{\{ total, soft, busted \}}. A runtime state stores the shuffled full deck, next-card index, player and opponent card arrays, their lengths, the phase, and an optional winner.
+
+A player observation stores phase, terminal flag, winner, visible player cards and their value, visible opponent cards, visible opponent-card count, total opponent-card count, and an opponent hand value field that is always the default hand value in the player view. The world view equals the full spectator observation type.
+
+\subsection{Card semantics}
+
+A standard deck is 52 cards consisting of four copies of each rank $1$ through $13$, laid out by four outer suit iterations each containing ranks in ascending order.
+
+\code{evaluate\_blackjack\_hand(cards,len)} is exact:
+\begin{enumerate}
+  \item iterate through the first \code{min(MAX\_CARDS,len)} entries,
+  \item treat rank $1$ as value $11$ and increment ace count,
+  \item treat ranks $11$ through $13$ as value $10$,
+  \item treat ranks $2$ through $10$ as their face value,
+  \item after summing, repeatedly subtract $10$ while total $>21$ and at least one ace remains soft,
+  \item return total, whether any soft ace remains, and whether total $>21$.
+\end{enumerate}
+
+\code{pack\_cards\_nibbles(cards,len)} packs each visible card rank into a 4-bit nibble at offset $4i$ for card index $i$.
+
+\subsection{Initialization}
+
+Initialization with seed $s$ uses \code{DeterministicRng::from\_seed\_and\_stream(s,0)} to shuffle the standard deck. The initial phase is \code{PlayerTurn}; winner is \code{None}; the dealing order is exactly:
+\begin{enumerate}
+  \item player card 1,
+  \item opponent card 1,
+  \item player card 2,
+  \item opponent card 2.
+\end{enumerate}
+Thus both players begin with exactly two cards.
+
+\subsection{Runtime transition law}
+
+The game is terminal iff \code{state.phase = Terminal}.
+
+The legal actions are:
+\begin{itemize}
+  \item if terminal: empty set,
+  \item else if player total $\ge 21$: singleton \code{Stand},
+  \item else: ordered pair \code{[Hit, Stand]}.
+\end{itemize}
+
+The player observation reveals the entire player hand always. It always exposes the total opponent-card count via \code{opponent\_card\_count}. However, it reveals the opponent cards themselves only when terminal: before terminal, \code{opponent\_visible\_len = 0} and all visible-opponent card slots are zero; at terminal, the player view reveals the full opponent cards and sets \code{opponent\_visible\_len = opponent\_card\_count}. In the player observation, \code{opponent\_value} remains the default hand value both before and after terminal. The spectator observation reveals both complete hands and both evaluated values.
+
+The terminal resolver sets phase to \code{Terminal} and then compares hands exactly:
+\begin{enumerate}
+  \item if the player is busted, reward $-1$, winner $1$;
+  \item else if opponent is busted or player total $>$ opponent total, reward $1$, winner $0$;
+  \item else if player total $<$ opponent total, reward $-1$, winner $1$;
+  \item else reward $0$, winner \code{None}.
+\end{enumerate}
+
+Opponent-turn resolution sets phase to \code{OpponentTurn} and repeatedly:
+\begin{enumerate}
+  \item compute opponent hand value,
+  \item stop if opponent busted or total $=21$,
+  \item sample \code{hit := rng.gen\_range(2) == 0},
+  \item stop if \code{hit=false},
+  \item stop if the deck is exhausted,
+  \item otherwise draw one opponent card and continue.
+\end{enumerate}
+Then invoke the terminal resolver above.
+
+The exact step law is:
+\begin{itemize}
+  \item if already terminal, leave state unchanged, set terminal kernel outcome with stored winner, and emit reward $0$;
+  \item else if no player action is supplied, force terminal phase with winner $1$, emit terminal kernel outcome and reward $-1$;
+  \item else if player total $\ge 21$ and the action is not \code{Stand}, force terminal loss with reward $-1$;
+  \item else if action is \code{Hit}, draw one player card:
+  \begin{itemize}
+    \item if the player is then busted, force terminal loss with reward $-1$;
+    \item else if player total becomes exactly $21$, resolve opponent turn and emit its terminal reward;
+    \item else emit reward $0$ and keep the game ongoing.
+  \end{itemize}
+  \item else if action is \code{Stand}, resolve opponent turn and emit its terminal reward.
+\end{itemize}
+After pushing the reward, if the resulting state is nonterminal the kernel outcome termination is reset to \code{Ongoing}.
+
+\subsection{Invariants and compact encoding}
+
+The state invariant requires:
+\begin{enumerate}
+  \item player and opponent lengths are each at least $2$,
+  \item player and opponent lengths do not exceed \code{MAX\_HAND\_CARDS},
+  \item \code{next\_card <= DECK\_SIZE},
+  \item the stored deck is a permutation of the standard 52-card rank multiset,
+  \item if the state is terminal, resolving terminality again on a clone yields the same winner.
+\end{enumerate}
+
+The player-observation invariant is exact:
+\begin{itemize}
+  \item if terminal, the observation must reveal all opponent cards and set visible length equal to \code{state.opponent\_len};
+  \item if nonterminal, visible opponent length must be $0$ and every visible-opponent card slot must be zero.
+\end{itemize}
+
+The transition postcondition requires reward-for-player-$0$ in $[-1,1]$ and equality of post-state terminality with kernel outcome terminality.
+
+The compact spec is exactly
+\[
+(2,64,4,2,-1,1,1).
+\]
+Action encoding uses \code{BLACKJACK\_ACTION\_ORDER}. Hence \code{Hit} encodes to $0$ and \code{Stand} encodes to $1$.
+
+For player observations, the 64-bit header word is exactly
+\[
+\begin{aligned}
+\code{header}_{\mathrm{player}} ={}& \code{phase\_code(phase)} \\
+&\lor ((\code{terminal as u64}) \ll 4) \\
+&\lor ((\code{player\_len as u64}) \ll 8) \\
+&\lor ((\code{player\_value.total as u64}) \ll 12) \\
+&\lor ((\code{player\_value.soft as u64}) \ll 20) \\
+&\lor ((\code{opponent\_card\_count as u64}) \ll 24) \\
+&\lor ((\code{opponent\_visible\_len as u64}) \ll 28) \\
+&\lor (\code{winner\_code(winner)} \ll 32).
+\end{aligned}
+\]
+Here \code{phase\_code(PlayerTurn)=0}, \code{phase\_code(OpponentTurn)=1},
+\code{phase\_code(Terminal)=2}, and
+\code{winner\_code(None)=0}, \code{winner\_code(Some(0))=1}, \code{winner\_code(Some(nonzero))=2}.
+The four output words are:
+\begin{enumerate}
+  \item the header,
+  \item packed player cards,
+  \item packed visible opponent cards,
+  \item $0$.
+\end{enumerate}
+For spectator observations, the 64-bit header word is exactly
+\[
+\begin{aligned}
+\code{header}_{\mathrm{spectator}} ={}& \code{phase\_code(phase)} \\
+&\lor ((\code{terminal as u64}) \ll 4) \\
+&\lor ((\code{player\_len as u64}) \ll 8) \\
+&\lor ((\code{player\_value.total as u64}) \ll 12) \\
+&\lor ((\code{player\_value.soft as u64}) \ll 20) \\
+&\lor ((\code{opponent\_card\_count as u64}) \ll 24) \\
+&\lor ((\code{opponent\_value.total as u64}) \ll 28) \\
+&\lor (\code{winner\_code(winner)} \ll 36).
+\end{aligned}
+\]
+
+\section{Builtin game: Platformer}
+
+This section exists only when feature \code{physics} is enabled.
+
+\subsection{Constants and action order}
+
+The exact constants are:
+\begin{align*}
+\code{BERRY\_COUNT} &= 6, & \code{PLAYER\_BODY\_ID} &= 1,\\
+\code{FIRST\_BERRY\_BODY\_ID} &= 10, & \code{PLATFORMER\_BODIES} &= 7,\\
+\code{PLATFORMER\_CONTACTS} &= 21, & \code{ALL\_BERRIES\_MASK} &= \code{0b00\_111111},\\
+\code{PLATFORMER\_Y\_SHIFT} &= 8, & \code{PLATFORMER\_REMAINING\_BERRIES\_SHIFT} &= 16,\\
+\code{PLATFORMER\_TERMINAL\_SHIFT} &= 22, & \code{PLATFORMER\_OBSERVATION\_BITS} &= 23.
+\end{align*}
+The canonical action order is
+\[
+[\code{Stay},\code{Left},\code{Right},\code{Jump}].
+\]
+
+\subsection{Configuration}
+
+A \code{PlatformerConfig} stores:
+\begin{itemize}
+  \item \code{width}, \code{height}, \code{player\_width}, \code{player\_height}, \code{jump\_delta}, and \code{berry\_y} as \code{u8},
+  \item \code{berry\_xs} as \code{[u8; 6]},
+  \item \code{sprain\_numerator} and \code{sprain\_denominator} as \code{u64},
+  \item \code{berry\_reward} and \code{finish\_bonus} as \code{Reward}.
+\end{itemize}
+
+The default configuration is exactly:
+\[
+\code{width}=12,\ \code{height}=3,\ \code{player\_width}=1,\ \code{player\_height}=1,\ \code{jump\_delta}=1,
+\]
+\[
+\code{berry\_y}=2,\ \code{berry\_xs}=[1,3,5,7,9,11],\ \code{sprain\_numerator}=1,\ \code{sprain\_denominator}=10,
+\]
+\[
+\code{berry\_reward}=1,\ \code{finish\_bonus}=10.
+\]
+
+
+The exact per-step reward function induced by a config is
+\[
+\begin{aligned}
+R(c,\code{collected},\code{finished},\code{sprained}) ={}& c.\code{berry\_reward}\cdot \code{collected} \\
+&+ \begin{cases}c.\code{finish\_bonus}, & \code{finished},\\ 0, & \text{otherwise}\end{cases} \\
+&- \begin{cases}1, & \code{sprained},\\ 0, & \text{otherwise.}\end{cases}
+\end{aligned}
+\]
+It is valid only when this integer lies within the \code{i64} range.
+
+Reward bounds are obtained by exhaustive search over:
+\begin{itemize}
+  \item \code{collected} from $0$ through $6$ inclusive,
+  \item \code{finished} in \{false,true\} except that \code{finished=true} with \code{collected=0} is skipped,
+  \item \code{sprained} in \{false,true\}.
+\end{itemize}
+If any candidate reward is out of \code{i64} range, the reward bounds are undefined.
+
+The config-derived compact spec exists exactly when the reward bounds exist and the reward span and reward offset are representable. Then
+\begin{align*}
+\code{action\_count} &= 4,\\
+\code{observation\_bits} &= 23,\\
+\code{observation\_stream\_len} &= 1,\\
+\code{reward\_bits} &= \begin{cases}1, & \code{reward\_span}=0,\\ \lfloor \log_2(\code{reward\_span}) \rfloor + 1, & \text{otherwise},\end{cases}\\
+\code{min\_reward},\code{max\_reward} &= \text{the exhaustive extrema above},\\
+\code{reward\_offset} &= -\code{min\_reward}.
+\end{align*}
+
+The config invariant requires all of the following:
+\begin{enumerate}
+  \item width, height, player width, and player height are nonzero,
+  \item player width $\le$ width,
+  \item player height $\le$ height,
+  \item jump delta $<$ height,
+  \item sprain denominator $>0$,
+  \item sprain numerator $\le$ sprain denominator,
+  \item berry y-coordinate $<$ height,
+  \item the compact spec exists,
+  \item berry x-coordinates are strictly increasing,
+  \item every berry x-coordinate is strictly less than width.
+\end{enumerate}
+
+The geometric helpers are exact. Each helper converts the underlying integer config fields to
+\code{f64}, performs the stated arithmetic in \code{f64}, and then wraps the result in
+\code{StrictF64}:
+\begin{align*}
+\code{arena\_bounds} &= [ (0,0),\ (\code{width},\code{height}) ],\\
+\code{player\_half\_extents} &= \left(\frac{\code{player\_width}}{2},\frac{\code{player\_height}}{2}\right),\\
+\code{player\_center}(x,y) &= \left(x + \frac{\code{player\_width}}{2},\ y + \frac{\code{player\_height}}{2}\right),\\
+\code{berry\_center}(i) &= (\code{berry\_xs}[i] + 0.5,\ \code{berry\_y}).
+\end{align*}
+All coordinates are represented with \code{StrictF64} values.
+
+\subsection{State and world construction}
+
+A \code{PlatformerState} stores the active config, a physics world with 7 bodies and 21 contact capacity, and an 8-bit mask \code{remaining\_berries}. The initial state for params $c$ is:
+\begin{itemize}
+  \item config $=c$,
+  \item world built with bounds \code{c.arena\_bounds()},
+  \item body 1: active kinematic player at \code{c.player\_center(0,0)} with player half-extents,
+  \item bodies 10 through 15: active triggers at the six berry centers with zero half-extents,
+  \item world contacts refreshed once,
+  \item \code{remaining\_berries = ALL\_BERRIES\_MASK}.
+\end{itemize}
+
+The player position is derived from the minimum AABB corner of body 1 by decoding its strict floats to \code{f64} and casting to \code{u8}.
+
+The state is terminal iff \code{remaining\_berries = 0}. The winner is \code{Some(0)} iff terminal, else \code{None}.
+
+The observation is exactly
+\[
+(\code{x},\code{y},\code{remaining\_berries},\code{terminal},\code{winner}).
+\]
+The world view stores the config, a clone of the full physics world, and berry views indicating which berries have been collected.
+
+\subsection{Transition law}
+
+Legal actions are the full canonical action order in that exact order whenever the state is nonterminal, and the empty set otherwise.
+
+If no action is supplied to the single-player step, it is treated as \code{Stay}.
+
+If the state is already terminal, the kernel outcome is terminal with the state winner and the emitted reward is $0$.
+
+Otherwise let $(x_0,y_0)$ be the current player tile position and $c$ the state config. The action effect is:
+\begin{itemize}
+  \item \code{Stay}: $(x,y,\code{sprained})=(x_0,0,\code{false})$;
+  \item \code{Left}: $(x,y,\code{sprained})=(x_0\ominus 1,0,\code{false})$, where $\ominus$ is saturating subtraction on \code{u8};
+  \item \code{Right}: if $x_0 + c.\code{player\_width} < c.\code{width}$ then $x=x_0+1$ else $x=x_0$; in either case $y=0$ and not sprained;
+  \item \code{Jump}: $x=x_0$, $y=c.\code{jump\_delta}$, and \code{sprained} is sampled by \code{rng.gen\_bool\_ratio(c.sprain\_numerator,c.sprain\_denominator)}.
+\end{itemize}
+
+The remainder of the step is exact:
+\begin{enumerate}
+  \item set the player body position to \code{c.player\_center(x,y)} using the deferred setter,
+  \item refresh contacts,
+  \item collect contacted berry triggers using \code{collect\_actor\_trigger\_contacts}, obtaining \code{collected} and updating \code{remaining\_berries},
+  \item mark trigger activity to agree with the new berry mask using the deferred trigger-mask helper,
+  \item advance the physics world by one tick using \code{world.step()},
+  \item compute \code{finished} as whether the pre-step berry mask was nonzero and the post-collection mask is zero,
+  \item compute reward from the config's checked reward function, panicking only if a validated config produced an out-of-range reward,
+  \item emit that reward for player 0,
+  \item emit terminal kernel outcome iff the post-step berry mask is zero.
+\end{enumerate}
+These two contact refresh points are intentional and not redundant. The explicit refresh before collection computes contacts for the player's newly moved body position, which the collection helper immediately queries. The later refresh inside \code{world.step()} occurs after the deferred trigger-mask update and establishes the cached contact set of the resulting post-step world state while also advancing the physics tick.
+
+\subsection{Invariants and compact encoding}
+
+The state invariant requires:
+\begin{enumerate}
+  \item config invariant holds,
+  \item no bits outside \code{ALL\_BERRIES\_MASK} are set in \code{remaining\_berries},
+  \item the physics world invariant holds,
+  \item the number of bodies is exactly 7,
+  \item the player body exists, is kinematic, active, and has the configured half-extents,
+  \item if the derived player tile position is $(x,y)$ then $x + \code{player\_width} \le \code{width}$ and $y \le \code{jump\_delta}$,
+  \item for each berry index $i$, body \code{FIRST\_BERRY\_BODY\_ID+i} is a trigger at the configured berry center and has activity exactly equal to whether bit $i$ remains set.
+\end{enumerate}
+
+The player and spectator observation invariants both require exact equality with the canonical observation derived from state. The world-view invariant requires matching config, matching physics world, and berry metadata exactly aligned with ids, configured coordinates, and collected bits.
+
+The transition postcondition is:
+\begin{itemize}
+  \item if the pre-state already had zero remaining berries, then the post-state equals the pre-state, reward is $0$, and the kernel outcome is terminal;
+  \item otherwise reward lies in the config-derived reward bounds and kernel outcome terminality equals whether the post-state has zero remaining berries.
+\end{itemize}
+
+Action encoding uses the canonical action order; hence \code{Stay}, \code{Left}, \code{Right}, \code{Jump} encode to $0,1,2,3$ respectively.
+
+Observation encoding emits one word
+\[
+\code{x}
+\;\lor\; (\code{y} \ll 8)
+\;\lor\; (\code{remaining\_berries} \ll 16)
+\;\lor\; ((\code{terminal as u64}) \ll 22).
+\]
+
+For the default configuration, the reward bounds are exactly $[-1,16]$, so the default platformer compact spec is
+\[
+(4,23,1,5,-1,16,1).
+\]
+
+\section{Proof surface}
+
+The proof module exports runtime-assertion helpers, refinement witnesses, liveness witnesses, manifest parsing, and access to embedded assets \code{PROOF\_CLAIM} and \code{PROOF\_MANIFEST\_RAW}. The function \code{verification\_manifest()} is exactly \code{VerificationManifest::current()}.
+
+\subsection{Safety witness}
+
+For any game, the default \code{SafetyWitness} methods alias the runtime safety hooks:
+\code{safety\_state\_invariant = state\_invariant},
+\code{safety\_action\_invariant = action\_invariant},
+\code{safety\_player\_observation\_invariant = player\_observation\_invariant},
+\code{safety\_spectator\_observation\_invariant = spectator\_observation\_invariant},
+\code{safety\_world\_view\_invariant = world\_view\_invariant}, and
+\code{safety\_transition\_postcondition = transition\_postcondition}.
+
+\subsection{Model game}
+
+A \code{ModelGame} augments a runtime game with executable model state and observation types plus model initialization, terminality, active-player enumeration, legal actions, observations, and model step semantics. When the runtime game additionally implements \code{OracleProjection}, the model layer may also supply a model world-view type and oracle projection. By default the model compact spec for params equals the runtime compact spec for params.
+
+\subsection{Refinement witness}
+
+A \code{RefinementWitness} provides maps from runtime states and observations into model values, and additionally from runtime world views into model values when an oracle projection exists. The exact refinement predicates are literal equality after projection. A \code{VerifiedGame} is a marker trait and is \emph{not} blanket-implemented.
+
+\subsection{Liveness and probabilistic witnesses}
+
+A \code{TerminationWitness} provides a natural-number rank. The exact terminal-rank condition required by the default helper is
+\[
+\code{model\_is\_terminal(state)} \iff \code{model\_rank(state)} = 0.
+\]
+The ranked progress assertion uses RNG stream $777$ and requires that any nonterminal model step either becomes terminal or strictly decreases rank.
+
+A \code{FairnessWitness} defaults to the empty assumption set.
+
+A \code{FiniteSupportOutcome} stores a successor model state, reward buffer, termination, and a strictly positive weight. A \code{ProbabilisticWitness} enumerates a finite support of such outcomes; the validity checker requires the support to be nonempty and the total weight to be strictly positive. For a game additionally exposed through \code{AixiEnvironment}, this witness is a canonical exact next-percept law whenever provided. A conforming implementation may alternatively provide a deterministic seeded generative law over the same action-percept histories, but every exposed AIXI adapter must admit at least one of these two predictive descriptions.
+
+\subsection{Refinement checkers}
+
+The proof helpers enforce exact equivalence between runtime and model initialization, observations, single-step execution, and replay/rewind behavior. The replay refinement helper uses a fixed history of type \code{FixedHistory<G,8,4,1>} and runtime RNG stream id $1$ for the session, while single-step refinement uses comparison RNG stream id $99$.
+
+The proof helpers in this subsection are:
+\begin{itemize}
+  \item \code{assert\_generated\_game\_surface(game,state,actions,params,seed)}: runs transition-contract assertions, observation-contract assertions, and additionally \code{assert\_compact\_roundtrip} on the first supplied action iff \code{game.compact\_spec\_for(params).action\_count > 0} and at least one action is present.
+  \item \code{assert\_verified\_game\_safety\_surface(game,state,actions,params,seed)}: the generated-game surface plus model-init, model-observation, and model-step refinement checks.
+  \item \code{assert\_verified\_game\_replay\_surface(game,params,seed,trace)}: exactly the replay refinement check.
+  \item \code{assert\_verified\_termination\_surface(game,state,actions,seed)}: exactly the ranked-progress check.
+  \item \code{assert\_verified\_probabilistic\_surface(game,state,actions)}: exactly the finite-support validity check.
+  \item \code{assert\_verified\_game\_surface(game,state,actions,params,seed)}: an exact alias for \code{assert\_verified\_game\_safety\_surface}.
+\end{itemize}
+
+\subsection{Proof manifest grammar and current manifest}
+
+A manifest is parsed line by line after trimming whitespace and skipping empty lines and comment lines beginning with \code{\#}. The accepted line forms are:
+\begin{itemize}
+  \item \code{boundary|value}
+  \item \code{kani|id|scope|target}
+  \item \code{verus|id|target}
+  \item \code{claim|status|component|text|links}
+  \item \code{assumption|component|text}
+\end{itemize}
+Statuses are exactly \code{checked}, \code{model}, \code{refined}, \code{runtime}, and \code{out\_of\_scope}. The validator enforces unique harness ids, unique claim components, valid linked proof ids, and exact status/link coherence:
+\begin{itemize}
+  \item \code{refined}: must reference both at least one Kani harness and at least one Verus harness,
+  \item \code{checked}: must reference Kani harnesses only,
+  \item \code{model}: must reference Verus harnesses only,
+  \item \code{runtime} and \code{out\_of\_scope}: must reference no formal proof ids.
+\end{itemize}
+
+The accessors \code{boundary()}, \code{harnesses()}, \code{claims()}, and \code{assumptions()}
+return the corresponding stored fields.
+
+The iterator \code{kani\_harnesses\_for\_scope(scope)} filters harnesses to those with
+\code{kind = Kani} and matching scope. The iterator \code{verus\_models()} filters harnesses
+to those with \code{kind = Verus}.
+
+The renderer \code{render\_claim\_markdown()} emits the current claim matrix markdown grouped
+in the exact status order \code{Refined}, \code{Checked}, \code{Model}, \code{Runtime}, and
+\code{OutOfScope}. The helper \code{ProofStatus::heading()} returns exactly:
+\begin{itemize}
+  \item \code{Refined} $\mapsto$ \code{"Refined Claims"},
+  \item \code{Checked} $\mapsto$ \code{"Implementation-Checked Claims"},
+  \item \code{Model} $\mapsto$ \code{"Model-Only Claims"},
+  \item \code{Runtime} $\mapsto$ \code{"Runtime-Tested Claims"},
+  \item \code{OutOfScope} $\mapsto$ \code{"Out Of Scope"}.
+\end{itemize}
+
+The current embedded proof boundary label is \code{kernel+builtins}. The reference implementation also carries a repository manifest artifact, but this document does not outsource conformance to any unstated external text. Normatively, the manifest grammar above, this boundary label, and the following claim-status partition are fixed:
+\begin{itemize}
+  \item checked: \code{engine.buffer}, \code{engine.compact}, \code{engine.rng},
+  \code{engine.session}, \code{engine.env}, \code{builtin.blackjack},
+  \code{builtin.platformer}
+  \item model: \code{engine.replay-laws}, \code{engine.liveness-laws}
+  \item refined: \code{builtin.tictactoe}
+  \item runtime: \code{render.runtime}
+  \item out of scope: \code{gpu.os}
+\end{itemize}
+A conforming implementation must preserve this boundary label, the claim components listed here, and the status/link-coherence rules above unless the spec itself is intentionally revised.
+
+\section{CLI semantics}
+
+This section exists only when feature \code{cli} is enabled.
+
+\subsection{Commands}
+
+The top-level commands are exactly:
+\begin{itemize}
+  \item \code{list}
+  \item \code{play <game> [options]}
+  \item \code{replay <game> [options]}
+  \item \code{validate}
+\end{itemize}
+If no command is supplied, usage is printed and execution succeeds.
+
+\subsection{Configuration parsing}
+
+The parsed configuration defaults are:
+\[
+\code{seed}=1,\quad \code{max\_steps}=64,\quad \code{policy}="human",\quad \code{policy\_explicit}=\code{false},
+\]
+\[
+\code{render}=\code{false},\quad \code{render\_physics}=\code{false},\quad \code{ticks\_per\_second}=12.0,
+\]
+\[
+\code{vsync}=\code{true},\quad \code{debug\_overlay}=\code{false}.
+\]
+Recognized options are exactly:
+\begin{itemize}
+  \item \code{--seed}, \code{--max-steps}, \code{--policy}, \code{--render},
+  \item \code{--render-physics}, \code{--ticks-per-second}, \code{--no-vsync}, and \code{--debug-overlay}.
+\end{itemize}
+Unknown arguments are rejected. \code{--render} and \code{--render-physics} are mutually
+exclusive. \code{--ticks-per-second} must be a finite positive floating-point value.
+
+If the policy was not explicitly supplied, the mode-dependent default is \code{human} for \code{play} and \code{first} for \code{replay}.
+
+\subsection{Policy resolution}
+
+For any game-specific parser, policy strings resolve exactly as follows:
+\begin{itemize}
+  \item \code{human} is accepted only in play mode,
+  \item \code{random} selects \code{RandomPolicy},
+  \item \code{first} selects \code{FirstLegalPolicy},
+  \item any string beginning with \code{script:} is parsed by the game-specific script parser and becomes a deterministic script,
+  \item anything else is an error.
+\end{itemize}
+
+\subsection{Headless stepping behavior}
+
+Headless execution prints after every executed tick:
+\begin{itemize}
+  \item a summary line \code{tick=<t> reward=<r> terminal=<bool> compact=<words>},
+  \item then the pretty-printed observation.
+\end{itemize}
+At termination of a headless run, the current Rust CLI additionally prints the 16-hex-digit historical legacy regression trace hash. This trailing hash line is informative only and is not a conformance requirement.
+
+Scripted headless execution validates, at each acting player in turn, that the script still has an action available and that the next script entry is legal in the current state; otherwise it returns an error naming the game and offending script index.
+
+\code{validate} runs three canned sessions through the generic policy loop \code{run\_with\_policy} with \code{max\_steps = 8}, using non-strict \code{ScriptedPolicy::new(...)} rather than strict scripted-headless execution. The exact seeds and initial scripts are:
+\begin{itemize}
+  \item tic-tac-toe: seed $7$, script $[0,4,8]$,
+  \item blackjack: seed $11$, script $[\code{Hit},\code{Stand}]$,
+  \item when \code{physics} is enabled, platformer: seed $3$, script $[\code{Right},\code{Jump},\code{Right}]$.
+\end{itemize}
+Because the scripted policy is non-strict, if the script becomes exhausted or proposes an illegal action, execution falls back to the first legal action rather than failing. Therefore these runs are not constrained to stop after exactly the supplied script length. Each run emits the ordinary per-tick headless output for \code{run\_with\_policy}. The current Rust implementation then prints final labeled historical legacy regression trace hashes; these hash lines are informative only. For that implementation the final hashes are exactly \code{5b961efcb0753027} for tic-tac-toe, \code{fb293f00ff61bdc7} for blackjack, and, when \code{physics} is enabled, \code{e1c6fea3a1707925} for platformer.
+
+The platformer hash in this CLI subsection is intentionally specific to the non-strict canned \code{validate} run above. It is therefore distinct from the illustrative platformer legacy hash attached to the explicit golden trace in Section~\ref{sec:golden-anchors}, which fixes a different trace and hashing context. Neither legacy hash affects conformance.
+
+\subsection{Game-specific dispatch}
+
+\code{tictactoe} and \code{blackjack} reject \code{--render-physics}. \code{platformer} accepts \code{--render-physics} only when both \code{physics} and \code{render} features are available. When the requested render mode is unavailable because the crate was built without \code{render}, the exact returned error text states that the crate was built without the render feature.
+
+\section{Renderer and scene model}
+
+This section exists only when feature \code{render} is enabled.
+It specifies the official presentation profile layered above the headless \code{Game}/session core and its derived AIXI-native adapter. Observation-mode presentation is derived solely from canonical observations and frame timing; oracle-mode presentation is an additional debug profile that requires \code{OracleProjection} and remains semantically inert.
+
+\subsection{Render modes and config}
+
+\code{RenderMode} is either \code{Observation} or \code{OracleWorld}.
+
+The \code{OracleWorld} mode is available only for games that implement \code{OracleProjection}; it renders from the additive oracle/debug projection \code{world\_view(state)}. Selecting that mode does not change stepping, legality, observations, rewards, or any other kernel semantics.
+
+The exact default \code{RenderConfig} is:
+\[
+\code{tick\_rate\_hz}=12.0,\ \code{max\_catch\_up\_ticks}=8,\ \code{vsync}=\code{true},\ \code{show\_debug\_overlay}=\code{false},
+\]
+\[
+\code{mode}=\code{Observation},\ \code{window\_width}=1024,\ \code{window\_height}=768.
+\]
+These width and height values are the exact default \code{RenderConfig} fields. In the current native renderer, however, initial window creation uses the selected presenter's preferred size rather than these stored default dimensions.
+
+\subsection{Frame view}
+
+\code{FrameMetrics} stores drawable width, height, and scale factor. \code{RenderGameView} exposes exactly:
+\begin{itemize}
+  \item the underlying game by shared reference,
+  \item the current tick,
+  \item the cached player observation for player 0,
+  \item the cached spectator observation,
+  \item an optional cached oracle world view,
+  \item an optional previous oracle world view,
+  \item an optional most recent kernel outcome,
+  \item reward lookup for player 0 with default $0$ when no kernel outcome exists,
+  \item the terminal flag,
+  \item interpolation alpha in $[0,1]$.
+\end{itemize}
+
+Observation presenters consume only the observation fields above. Oracle presenters additionally consume the oracle world-view fields when present.
+
+Single-frame scene rendering helpers populate a fresh \code{Scene2d} from the current session and optional last kernel outcome, without running any window loop.
+
+\subsection{Drivers}
+
+The action command algebra is:
+\[
+\code{Pulse(a)} \mid \code{SetContinuous(a)} \mid \code{ClearContinuous}.
+\]
+
+These stock drivers are player-0 presentation drivers for sessions with one externally controlled actor. They are not full multi-player input schedulers.
+
+A \code{TurnBasedDriver} stores a session, an optional pending action, and an optional last kernel outcome. A pulse or continuous-set command overwrites the pending action; clear clears it. On advance with due ticks $d$:
+\begin{itemize}
+  \item if $d=0$ or the session is terminal, do nothing;
+  \item if no pending action exists, do nothing;
+  \item otherwise consume the pending action, form exactly one joint action for player 0, execute one session step, and store the resulting kernel outcome.
+\end{itemize}
+Thus even if \code{due\_ticks > 1}, at most one turn-based step occurs per call.
+
+A \code{RealtimeDriver} stores a session, a neutral action, an optional continuous action, an optional pulse action, and an optional last kernel outcome. On each of \code{due\_ticks} iterations, if nonterminal, it chooses the action by priority
+\[
+\code{pulse\_action} \succ \code{continuous\_action} \succ \code{neutral\_action},
+\]
+where a pulse is consumed after one use, then executes one player-0 step.
+
+A \code{PassivePolicyDriver} ignores submitted commands. On each due tick while nonterminal it executes one session step with a single internal policy assigned to player $0$.
+
+\subsection{Tick pacer}
+
+\code{TickPacer::new(rate,max)} requires a finite positive rate. It stores tick period
+$1/\code{rate}$ and \code{max\_catch\_up\_ticks = max(max,1)}. On the first
+\code{consume\_due\_ticks(now)} call, it stores \code{now} and returns $0$.
+
+Thereafter it accumulates elapsed wall-clock seconds, capped to one period times the maximum
+catch-up ticks, and extracts as many whole periods as possible up to the catch-up bound. The
+interpolation alpha is the remaining fractional accumulator divided by the tick period, clamped
+to $[0,1]$.
+
+\subsection{Renderer application}
+
+\code{RendererApp::new(config,driver,presenter)} stores those values. On non-\code{wasm32}
+targets, \code{run\_native()} creates a winit event loop, constructs a native app, and runs it.
+On \code{wasm32}, \code{run\_native()} always returns the exact error message
+\code{"native window rendering is not available on wasm32 targets"}.
+
+In the native application loop:
+\begin{itemize}
+  \item on resume, exactly one window is created with the presenter title and preferred window size,
+  \item the GPU backend is initialized,
+  \item \code{CloseRequested} exits,
+  \item \code{Resized} resizes the backend and requests redraw,
+  \item \code{RedrawRequested} advances the driver according to the pacer, refreshes cached observations and any available oracle world views, populates a scene, optionally overlays debug information, and renders,
+  \item other window events are delegated to the presenter via a temporary queued-action sink and then submitted to the driver in order,
+  \item every \code{about\_to\_wait} requests redraw.
+\end{itemize}
+The debug overlay, when enabled, draws a panel showing the render mode label (\code{observation} or \code{oracle}), the current tick, reward for player 0, and terminality.
+
+\subsection{Scene model}
+
+A \code{Scene2d} is the frame command buffer
+\[
+(\code{clear\_color},\code{panels},\code{lines},\code{circles},\code{texts},\code{textured\_quads},\code{hit\_regions}).
+\]
+Its default capacities are exactly $(16,32,16,16,8,16)$ for those six command vectors. The constructor \code{with\_capacities(p,l,c,t,q,h)} creates a scene with \code{clear\_color = Color::BLACK} and those exact vector capacities. Clearing a scene restores \code{clear\_color = Color::BLACK} and empties all command vectors while preserving their capacities. The mutators \code{set\_clear\_color}, \code{panel}, \code{line}, \code{circle}, \code{text}, \code{textured\_quad}, and \code{hit\_region} append exactly one corresponding command record, except for \code{set\_clear\_color}, which overwrites the clear color.
+
+\code{Color} is a plain RGBA float record with public channels \code{r}, \code{g}, \code{b}, and \code{a}; the type itself does not constrain those channels to $[0,1]$. The constants \code{WHITE} and \code{BLACK} are exactly opaque white and opaque black. The constructors \code{rgb(r,g,b)} and \code{rgba(r,g,b,a)} store their supplied floats verbatim, with \code{rgb} setting \code{a := 1.0}. The constructors \code{from\_rgb8} and \code{from\_rgba8} divide each supplied byte by $255$ to obtain floats.
+
+\code{Point2::new(x,y)} stores those coordinates verbatim. \code{Rect::new(x,y,width,height)} stores those four scalars verbatim. Its helpers satisfy \code{left() = x}, \code{right() = x + width}, \code{top() = y}, \code{bottom() = y + height}, \code{center() = (x + width/2, y + height/2)}, and \code{contains(point)} iff the point lies within the closed rectangle bounds.
+
+\subsection{Builtin presenters}
+
+The builtin color constants are exact:
+\begin{align*}
+\code{BG} &= (17,24,39)/255, & \code{PANEL} &= (30,41,59)/255, & \code{PANEL\_ALT} &= (15,23,42)/255,\\
+\code{ACCENT} &= (56,189,248)/255, & \code{ACCENT\_WARM} &= (251,191,36)/255, & \code{SUCCESS} &= (34,197,94)/255,\\
+\code{TEXT} &= (241,245,249)/255, & \code{MUTED} &= (148,163,184)/255,
+\end{align*}
+with \code{DANGER} = $(248,113,113)/255$ additionally defined for physics rendering.
+
+For \code{TicTacToePresenter}:
+\begin{itemize}
+  \item title is \code{"gameengine :: TicTacToe"}, preferred window size $(860,780)$,
+  \item board side length is $0.66 \cdot \min(\code{width},\code{height})$ pixels,
+  \item the board rect is horizontally centered at top offset $72$,
+  \item left mouse press on a cell emits \code{Pulse(TicTacToeAction(index))},
+  \item number keys and numpad keys 1 through 9 emit actions for board indices 0 through 8 respectively,
+  \item player marks are drawn as two warm diagonal strokes, opponent marks as a green ring on the panel background, and all nine cells register hit regions labeled \code{"tictactoe-cell"}.
+\end{itemize}
+
+For \code{BlackjackPresenter}:
+\begin{itemize}
+  \item title is \code{"gameengine :: Blackjack"}, preferred size $(980,720)$,
+  \item hit button rect is $(64, h-136, 180, 64)$ and stand button rect is $(264, h-136, 180, 64)$,
+  \item mouse clicks on those buttons submit \code{Hit} or \code{Stand} only during player turn and only when nonterminal,
+  \item keyboard \code{H} submits \code{Hit}; \code{S}, \code{Enter}, or \code{Space} submits \code{Stand},
+  \item hidden opponent cards are rendered as concealed unless the observation is terminal.
+\end{itemize}
+
+For \code{PlatformerPresenter} (physics feature required):
+\begin{itemize}
+  \item title is \code{"gameengine :: Platformer"}, preferred size $(1180,620)$,
+  \item the world viewport rect is $(72,96,w-144,h-224)$,
+  \item holding left or \code{A} sets continuous \code{Left}, holding right or \code{D} sets continuous \code{Right}, and releasing either recomputes the continuous command, clearing it when both are inactive,
+  \item pressing up, space, or \code{W} emits \code{Pulse(Jump)},
+  \item berries are warm circles drawn only while their corresponding bits remain set,
+  \item the player is drawn as an accent panel at the observed tile position.
+\end{itemize}
+
+For \code{PlatformerPhysicsPresenter}:
+\begin{itemize}
+  \item title is \code{"gameengine :: Platformer Oracle Physics"}, preferred size $(1240,720)$,
+  \item input handling is delegated to an inner \code{PlatformerPresenter},
+  \item bodies are rendered from the oracle physics world, using interpolation between previous and current oracle world views,
+  \item fill colors are \code{MUTED} for static, \code{ACCENT} for kinematic, and \code{ACCENT\_WARM} for triggers,
+  \item each current contact draws a danger-colored line between body-rectangle centers,
+  \item the footer includes player status, body count, contact count, and physics tick.
+\end{itemize}
+
+\section{Parallel replay API}
+
+This section exists only when feature \code{parallel} is enabled.
+
+\code{JointActionTrace<A>} is \code{Vec<Vec<PlayerAction<A>>>}. The exact function
+\[
+\code{replay\_many(game,traces)}
+\]
+uses Rayon parallel iteration over the supplied $(\code{seed},\code{steps})$ pairs. For each
+pair it creates \code{InteractiveSession::new(*game,*seed)}, replays steps in order until the
+session becomes terminal or steps are exhausted, and returns the resulting dynamic replay trace.
+The output order matches the input order of the trace slice.
+
+\section{Validation anchors}
+\label{sec:golden-anchors}
+
+The implementation is pinned by the following exact normative regression anchors. Historical legacy hashes listed below are informative outputs of the current Rust implementation only.
+
+\subsection{Compact codec round-trips}
+
+For every integer reward in a game's declared compact reward interval, encoding followed by decoding yields the original reward. For builtins this is exercised over:
+\begin{itemize}
+  \item TicTacToe rewards in $[-3,2]$
+  \item Blackjack rewards in $[-1,1]$
+  \item Platformer rewards in its config-derived interval, which for the default config is $[-1,16]$
+\end{itemize}
+
+Action round-trips hold for every builtin compact action value.
+
+\subsection{Allocation-free hot paths}
+
+After initialization, one direct \code{step\_in\_place} invocation for each builtin under the tested scenarios performs zero heap allocations:
+\begin{itemize}
+  \item TicTacToe with seed $7$ and action $0$
+  \item Blackjack with seed $11$ and action \code{Hit}
+  \item Platformer (when enabled) with seed $3$ and action \code{Right}
+\end{itemize}
+
+\subsection{Golden compact traces and illustrative legacy hashes}
+
+For TicTacToe with seed $7$ and action sequence $[0,4,1,2]$, the spectator compact trace is exactly
+\[
+[[8193],[139521],[141573],[141589]]
+\]
+and the current Rust implementation's illustrative legacy hash is exactly
+\[
+\code{0x5b96\_1efc\_b075\_3027}.
+\]
+
+For Blackjack with seed $11$ and action sequence $[\code{Hit}]$, the spectator compact trace is exactly
+\[
+[[140693832466, 1449, 132, 0]]
+\]
+and the current Rust implementation's illustrative legacy hash is exactly
+\[
+\code{0xfb29\_3f00\_ff61\_bdc7}.
+\]
+
+For the default Platformer with seed $3$ and action sequence
+\[
+\begin{aligned}
+\relax[&\code{Right},\code{Jump},\code{Right},\code{Right},\code{Jump},\code{Right},\\
+ &\code{Right},\code{Jump},\code{Right},\code{Right},\code{Jump},\code{Right},\\
+ &\code{Right},\code{Jump},\code{Right},\code{Right},\code{Jump}],
+\end{aligned}
+\]
+the spectator compact trace is exactly
+\[
+\begin{aligned}
+\relax[&[4128769],[4063489],[4063234],[4063235],[3932419],[3932164],\\
+ &[3932165],[3670277],[3670022],[3670023],[3145991],[3145736],\\
+ &[3145737],[2097417],[2097162],[2097163],[4194571]]
+\end{aligned}
+\]
+and the current Rust implementation's illustrative legacy hash is exactly
+\[
+\code{0x1ee7\_fb2e\_3689\_eabf}.
+\]
+
+This platformer illustrative legacy hash is the hash of the explicit 17-step spectator compact trace displayed above. It is not the CLI \code{validate} hash from the earlier command-line subsection, which arises from a different execution path and trace. Neither legacy hash is a normative anchor.
+
+\subsection{Replay and rewind anchors}
+
+For the default Platformer with seed $3$ and actions \code{Right}, \code{Jump}, \code{Right}, \code{Right}, reconstructing state at tick $2$, rewinding to tick $2$, and forking at tick $2$ must all yield the same restored state; the fork trace hash must equal the rewound trace hash.
+
+When feature \code{parallel} is enabled, \code{parallel::replay\_many} must produce exactly the same replay traces as serial replay on the same trace inputs.
+
+\section{Examples and benchmark surface}
+
+The repository additionally contains example and benchmark programs that exercise the public API:
+\begin{itemize}
+  \item \code{examples/pong\_core.rs}: example authoring of a single-player game,
+  \item \code{examples/perf\_probe.rs}: runtime performance probe,
+  \item \code{benches/step\_throughput.rs} and \code{benches/kernel\_hotpaths.rs}: Criterion benchmarks over builtin-enabled configurations.
+\end{itemize}
+These programs are informative exercisers of the public API rather than additional normative anchors beyond the APIs already specified.
+
+\section{Conformance criterion}
+
+A clone is conforming iff, for every enabled feature set $F$ and every API call sequence admitted by the corresponding product:
+\begin{enumerate}
+  \item all exported datatypes, constants, command grammars, and feature-gated module presences agree with this document,
+  \item all \code{Game} and session laws, AIXI-native action-percept laws for the derived \code{AixiEnvironment} adapter, its black-box opacity law forbidding hidden-state and RNG oracles beyond explicit setup inputs and emitted percept history, chronological constraints, canonical history serializations, state transitions, compact encodings, RNG results, replay and rewind reconstructions, policy selections, environment-step results, and renderer-driver timing laws agree extensionally with this document,
+  \item all explicit trace, replay, and codec anchors in Section~\ref{sec:golden-anchors} are reproduced exactly; any legacy hash values cited in that section or in the CLI section are informative only and do not affect conformance,
+  \item the proof-manifest grammar, boundary label, claim/status partition, and validation rules stated herein are preserved exactly.
+\end{enumerate}
+
+\end{document}

@@ -1,6 +1,6 @@
 use super::{TicTacToe, TicTacToeAction, TicTacToeCell, TicTacToeState};
 use crate::buffer::FixedVec;
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::proof::{assert_finite_support_is_valid, assert_ranked_progress};
 use crate::session::{FixedHistory, SessionKernel};
 use crate::types::PlayerAction;

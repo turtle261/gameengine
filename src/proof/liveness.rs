@@ -5,7 +5,7 @@ use core::fmt::Debug;
 use crate::buffer::Buffer;
 use crate::proof::model::ModelGame;
 use crate::rng::DeterministicRng;
-use crate::types::{StepOutcome, Termination};
+use crate::types::{KernelOutcome, Termination};
 
 /// Ranking-function based termination witness over the executable model.
 pub trait TerminationWitness: ModelGame {
@@ -27,7 +27,7 @@ pub fn assert_ranked_progress<G: TerminationWitness>(
 ) {
     let mut post = pre.clone();
     let mut rng = DeterministicRng::from_seed_and_stream(seed, 777);
-    let mut outcome = StepOutcome::<G::RewardBuf>::default();
+    let mut outcome = KernelOutcome::<G::RewardBuf>::default();
     let pre_rank = game.model_rank(pre);
     game.model_step_in_place(&mut post, actions, &mut rng, &mut outcome);
 

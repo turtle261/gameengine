@@ -2,7 +2,7 @@
 
 use crate::game::Game;
 use crate::session::{HistoryStore, SessionKernel};
-use crate::types::StepOutcome;
+use crate::types::KernelOutcome;
 
 /// Minimal wrapper that executes unchecked kernel steps.
 pub struct KernelStepper<'a, G: Game, H: HistoryStore<G>> {
@@ -16,7 +16,7 @@ impl<'a, G: Game, H: HistoryStore<G>> KernelStepper<'a, G, H> {
     }
 
     /// Applies one joint-action step.
-    pub fn step(&mut self, actions: &G::JointActionBuf) -> &StepOutcome<G::RewardBuf> {
+    pub fn step(&mut self, actions: &G::JointActionBuf) -> &KernelOutcome<G::RewardBuf> {
         self.session.step_with_joint_actions(actions)
     }
 }
@@ -33,7 +33,7 @@ impl<'a, G: Game, H: HistoryStore<G>> CheckedStepper<'a, G, H> {
     }
 
     /// Applies one checked joint-action step.
-    pub fn step(&mut self, actions: &G::JointActionBuf) -> &StepOutcome<G::RewardBuf> {
+    pub fn step(&mut self, actions: &G::JointActionBuf) -> &KernelOutcome<G::RewardBuf> {
         self.session.step_with_joint_actions_checked(actions)
     }
 }

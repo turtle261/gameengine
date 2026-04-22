@@ -3,12 +3,14 @@
 use crate::buffer::FixedVec;
 use crate::compact::CompactSpec;
 use crate::core::single_player::{self, SinglePlayerRewardBuf};
+use crate::game::OracleProjection;
 use crate::proof::{
     FairnessWitness, FiniteSupportOutcome, ModelGame, ProbabilisticWitness, RefinementWitness,
+    SafetyWitness,
     TerminationWitness, VerifiedGame,
 };
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerId, Seed, StepOutcome, Termination};
+use crate::types::{PlayerId, Seed, KernelOutcome, Termination};
 use crate::verification::reward_and_terminal_postcondition;
 
 const WIN_LINES: [(usize, usize, usize); 8] = [
@@ -235,7 +237,6 @@ impl single_player::SinglePlayerGame for TicTacToe {
     type State = TicTacToeState;
     type Action = TicTacToeAction;
     type Obs = TicTacToeObservation;
-    type WorldView = TicTacToeWorldView;
     type ActionBuf = FixedVec<TicTacToeAction, 9>;
     type WordBuf = FixedVec<u64, 1>;
 
@@ -269,16 +270,12 @@ impl single_player::SinglePlayerGame for TicTacToe {
         *state
     }
 
-    fn world_view(&self, state: &Self::State) -> Self::WorldView {
-        *state
-    }
-
     fn step_in_place(
         &self,
         state: &mut Self::State,
         action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<SinglePlayerRewardBuf>,
+        out: &mut KernelOutcome<SinglePlayerRewardBuf>,
     ) {
         let reward = Self::model_step(state, action, rng);
 
@@ -286,7 +283,7 @@ impl single_player::SinglePlayerGame for TicTacToe {
         out.termination = Self::termination_from_state(state);
     }
 
-    fn compact_spec(&self) -> CompactSpec {
+    fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
         CompactSpec {
             action_count: 9,
             observation_bits: 18,
@@ -322,12 +319,18 @@ impl single_player::SinglePlayerGame for TicTacToe {
         action.0 < 9
     }
 
+    fn oracle_world_view_invariant(&self, state: &Self::State) -> bool {
+        let world: <Self as OracleProjection>::WorldView =
+            <Self as OracleProjection>::world_view(self, state);
+        <Self as OracleProjection>::world_view_invariant(self, state, &world)
+    }
+
     fn transition_postcondition(
         &self,
         pre: &Self::State,
         _action: Option<Self::Action>,
         post: &Self::State,
-        outcome: &StepOutcome<SinglePlayerRewardBuf>,
+        outcome: &KernelOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         if pre.terminal {
             return post == pre && outcome.reward_for(0) == 0 && outcome.is_terminal();
@@ -342,10 +345,17 @@ impl single_player::SinglePlayerGame for TicTacToe {
     }
 }
 
+impl OracleProjection for TicTacToe {
+    type WorldView = TicTacToeWorldView;
+
+    fn world_view(&self, state: &Self::State) -> Self::WorldView {
+        *state
+    }
+}
+
 impl ModelGame for TicTacToe {
     type ModelState = TicTacToeState;
     type ModelObs = TicTacToeObservation;
-    type ModelWorldView = TicTacToeWorldView;
 
     fn model_init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::ModelState {
         TicTacToeState::default()
@@ -389,16 +399,12 @@ impl ModelGame for TicTacToe {
         *state
     }
 
-    fn model_world_view(&self, state: &Self::ModelState) -> Self::ModelWorldView {
-        *state
-    }
-
     fn model_step_in_place(
         &self,
         state: &mut Self::ModelState,
         actions: &Self::JointActionBuf,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<Self::RewardBuf>,
+        out: &mut KernelOutcome<Self::RewardBuf>,
     ) {
         let action = actions
             .as_slice()
@@ -420,7 +426,35 @@ impl RefinementWitness for TicTacToe {
         *observation
     }
 
-    fn runtime_world_view_to_model(&self, world: &Self::WorldView) -> Self::ModelWorldView {
+    fn has_oracle_refinement(&self) -> bool {
+        true
+    }
+
+    fn assert_world_refinement_if_present(&self, state: &Self::State, model: &Self::ModelState) {
+        let world = <Self as OracleProjection>::world_view(self, state);
+        let model_world = <Self as crate::proof::ModelOracleProjection>::model_world_view(self, model);
+        assert!(self.safety_world_view_invariant(state, &world));
+        assert!(<Self as crate::proof::OracleRefinementWitness>::world_view_refines_model(
+            self,
+            &world,
+            &model_world,
+        ));
+    }
+}
+
+impl crate::proof::ModelOracleProjection for TicTacToe {
+    type ModelWorldView = TicTacToeWorldView;
+
+    fn model_world_view(&self, state: &Self::ModelState) -> Self::ModelWorldView {
+        *state
+    }
+}
+
+impl crate::proof::OracleRefinementWitness for TicTacToe {
+    fn runtime_world_view_to_model(
+        &self,
+        world: &<Self as OracleProjection>::WorldView,
+    ) -> <Self as crate::proof::ModelOracleProjection>::ModelWorldView {
         *world
     }
 }

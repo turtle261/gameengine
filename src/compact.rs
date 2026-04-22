@@ -125,25 +125,57 @@ pub struct CompactSpec {
 }
 
 impl CompactSpec {
-    /// Maximum representable value for one observation word.
-    pub fn max_observation_value(&self) -> u64 {
+    /// Canonical compact bit width for one external action symbol.
+    pub fn action_bits(&self) -> u8 {
+        if self.action_count <= 1 {
+            return 0;
+        }
+        (u64::BITS - (self.action_count - 1).leading_zeros()) as u8
+    }
+
+    /// Canonical compact bit width for one observation word field.
+    pub fn observation_word_bits(&self) -> u8 {
         if self.observation_bits == 0 {
             0
         } else if self.observation_bits >= 64 {
+            64
+        } else {
+            self.observation_bits
+        }
+    }
+
+    /// Canonical compact bit width for one reward word field.
+    pub fn reward_word_bits(&self) -> u8 {
+        if self.reward_bits == 0 {
+            0
+        } else if self.reward_bits >= 64 {
+            64
+        } else {
+            self.reward_bits
+        }
+    }
+
+    /// Maximum representable value for one observation word.
+    pub fn max_observation_value(&self) -> u64 {
+        let bits = self.observation_word_bits();
+        if bits == 0 {
+            0
+        } else if bits >= 64 {
             u64::MAX
         } else {
-            (1u64 << self.observation_bits) - 1
+            (1u64 << bits) - 1
         }
     }
 
     /// Maximum representable compact reward value from declared bit width.
     pub fn max_reward_value(&self) -> u64 {
-        if self.reward_bits == 0 {
+        let bits = self.reward_word_bits();
+        if bits == 0 {
             0
-        } else if self.reward_bits >= 64 {
+        } else if bits >= 64 {
             u64::MAX
         } else {
-            (1u64 << self.reward_bits) - 1
+            (1u64 << bits) - 1
         }
     }
 

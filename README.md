@@ -2,9 +2,13 @@
 
 `gameengine` is a deterministic, replayable, proof-oriented game/simulation kernel for games treated as mathematical objects.
 
-The kernel is designed around:
+The kernel is designed around an AIXI-native action-percept law:
 
-`(seed, state, joint_actions) -> (new_state, reward, observations, termination)`
+- `reset(seed) -> initial percept x0`
+- `step(action_token) -> next percept x_n`
+
+Game/session internals can still be richer (`state`, `joint_actions`, debug/oracle views), but the
+agent-facing front door is one action channel and one percept channel.
 
 Everything else is layered on top:
 
@@ -40,7 +44,16 @@ The target audience is broader than traditional game development: computer scien
 
 ## Authoring Ergonomics
 
-The core `Game` trait remains available for full control, but single-player environments now have an ergonomic adapter:
+The runtime surface is split into:
+
+- `GameKernel`
+- `ObservationModel`
+- `CompactCodec`
+- `ContractSurface`
+- optional `OracleProjection`
+- umbrella `Game = GameKernel + ObservationModel + CompactCodec + ContractSurface`
+
+For compatibility, a monolithic authoring trait (`GameAuthoring`) is also available, and single-player environments have an ergonomic adapter:
 
 - `core::single_player::SinglePlayerGame`
 
@@ -61,11 +74,16 @@ cargo run --example pong_core
 
 ## Environment Interface
 
-`core::env::Environment` exposes an infotheory-compatible compact interface:
+`core::env::Environment` exposes the AIXI-native compact front door:
 
-- `reset(seed)`
-- `reset_with_params(seed, params)`
-- `step(action_bits) -> EnvStep { observation_bits, reward, terminated, truncated }`
+- checked `ActionToken` construction (`OutOfAlphabet` on invalid symbols),
+- `reset(seed) -> Percept { observation_bits, reward, terminated }`,
+- `reset_with_params(seed, params) -> Percept`,
+- `step(action_token) -> Percept`.
+
+Compatibility helper:
+
+- `step_bits(encoded)` constructs `ActionToken` from current compact spec and delegates to `step`.
 
 Compact constraints are canonical and centralized in `CompactSpec`:
 
@@ -208,6 +226,9 @@ Useful flags:
 - `--no-vsync`
 - `--debug-overlay`
 
+Headless and `validate` output prints **legacy regression trace hash** labels. These hashes are
+kept as regression anchors; explicit compact traces remain the portable primary anchor.
+
 ## Rollback And Replay
 
 `SessionKernel`, `DynamicHistory`, and `FixedHistory` support:
@@ -226,7 +247,7 @@ The core library is WASM-compatible. The headless kernel remains portable, and t
 
 ## Project Direction
 
-The kernel is intentionally shaped to be compatible with Infotheory AIXI interfaces:
+The kernel is intentionally shaped to be compatible with AIXI-style interfaces:
 
 - compact `u64` actions/observations,
 - `i64` rewards,

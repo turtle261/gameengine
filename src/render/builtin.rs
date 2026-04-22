@@ -10,15 +10,14 @@ use crate::builtin::{
 #[cfg(feature = "physics")]
 use crate::builtin::{Platformer, PlatformerAction, PlatformerConfig, PlatformerObservation};
 #[cfg(feature = "physics")]
-use crate::physics::PhysicsOracleView2d;
-
+use crate::game::OracleProjection;
 #[cfg(feature = "physics")]
-use super::OraclePresenter;
+use crate::physics::PhysicsOracleView2d;
+#[cfg(feature = "physics")]
+use crate::session::{HistoryStore, SessionKernel};
+
 use super::scene::Color;
-use super::{
-    ActionCommand, ActionSink, FrameMetrics, ObservationPresenter, Point2, Presenter, Rect,
-    RenderGameView, Scene2d,
-};
+use super::{ActionCommand, ActionSink, FrameMetrics, Point2, Presenter, Rect, RenderGameView, Scene2d};
 
 const BG: Color = Color::from_rgb8(17, 24, 39);
 const PANEL: Color = Color::from_rgb8(30, 41, 59);
@@ -70,6 +69,8 @@ impl TicTacToePresenter {
 }
 
 impl Presenter<TicTacToe> for TicTacToePresenter {
+    type WorldView = ();
+
     fn title(&self, _game: &TicTacToe) -> String {
         "gameengine :: TicTacToe".to_string()
     }
@@ -82,7 +83,7 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
         &mut self,
         event: &WindowEvent,
         metrics: FrameMetrics,
-        _view: &RenderGameView<'_, TicTacToe>,
+        _view: &RenderGameView<'_, TicTacToe, ()>,
         actions: &mut dyn ActionSink<TicTacToe>,
     ) {
         match event {
@@ -133,7 +134,7 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
         &mut self,
         scene: &mut Scene2d,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, TicTacToe>,
+        view: &RenderGameView<'_, TicTacToe, ()>,
     ) {
         scene.set_clear_color(BG);
         let observation = view.player_observation();
@@ -225,7 +226,6 @@ impl Presenter<TicTacToe> for TicTacToePresenter {
     }
 }
 
-impl ObservationPresenter<TicTacToe> for TicTacToePresenter {}
 
 /// Observation presenter for blackjack.
 #[derive(Clone, Copy, Debug, Default)]
@@ -252,6 +252,8 @@ impl BlackjackPresenter {
 }
 
 impl Presenter<Blackjack> for BlackjackPresenter {
+    type WorldView = ();
+
     fn title(&self, _game: &Blackjack) -> String {
         "gameengine :: Blackjack".to_string()
     }
@@ -264,7 +266,7 @@ impl Presenter<Blackjack> for BlackjackPresenter {
         &mut self,
         event: &WindowEvent,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, Blackjack>,
+        view: &RenderGameView<'_, Blackjack, ()>,
         actions: &mut dyn ActionSink<Blackjack>,
     ) {
         match event {
@@ -305,7 +307,7 @@ impl Presenter<Blackjack> for BlackjackPresenter {
         &mut self,
         scene: &mut Scene2d,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, Blackjack>,
+        view: &RenderGameView<'_, Blackjack, ()>,
     ) {
         scene.set_clear_color(Color::from_rgb8(6, 24, 24));
         scene.panel(
@@ -394,7 +396,6 @@ impl Presenter<Blackjack> for BlackjackPresenter {
     }
 }
 
-impl ObservationPresenter<Blackjack> for BlackjackPresenter {}
 
 #[cfg(feature = "physics")]
 /// Observation presenter for platformer.
@@ -430,43 +431,12 @@ impl PlatformerPresenter {
         sink.submit_command(command);
     }
 
-    fn world_rect(metrics: FrameMetrics) -> Rect {
-        Rect::new(
-            72.0,
-            96.0,
-            metrics.width as f32 - 144.0,
-            metrics.height as f32 - 224.0,
-        )
-    }
-
-    fn unit_rect(metrics: FrameMetrics, config: PlatformerConfig, x: u8, y: u8) -> Rect {
-        let world = Self::world_rect(metrics);
-        let width = world.width / config.width as f32;
-        let height = world.height / config.height as f32;
-        Rect::new(
-            world.x + x as f32 * width,
-            world.y + (config.height as f32 - y as f32 - 1.0) * height,
-            width,
-            height,
-        )
-    }
-}
-
-#[cfg(feature = "physics")]
-impl Presenter<Platformer> for PlatformerPresenter {
-    fn title(&self, _game: &Platformer) -> String {
-        "gameengine :: Platformer".to_string()
-    }
-
-    fn preferred_window_size(&self) -> (u32, u32) {
-        (1180, 620)
-    }
-
-    fn on_window_event(
+    /// View-agnostic window-input handler shared between observation-mode
+    /// and oracle-mode presenters. The two modes differ only in the cached
+    /// world-view slot type, which input handling does not inspect.
+    pub(crate) fn apply_window_input(
         &mut self,
         event: &WindowEvent,
-        _metrics: FrameMetrics,
-        _view: &RenderGameView<'_, Platformer>,
         actions: &mut dyn ActionSink<Platformer>,
     ) {
         match event {
@@ -505,11 +475,55 @@ impl Presenter<Platformer> for PlatformerPresenter {
         }
     }
 
+    fn world_rect(metrics: FrameMetrics) -> Rect {
+        Rect::new(
+            72.0,
+            96.0,
+            metrics.width as f32 - 144.0,
+            metrics.height as f32 - 224.0,
+        )
+    }
+
+    fn unit_rect(metrics: FrameMetrics, config: PlatformerConfig, x: u8, y: u8) -> Rect {
+        let world = Self::world_rect(metrics);
+        let width = world.width / config.width as f32;
+        let height = world.height / config.height as f32;
+        Rect::new(
+            world.x + x as f32 * width,
+            world.y + (config.height as f32 - y as f32 - 1.0) * height,
+            width,
+            height,
+        )
+    }
+}
+
+#[cfg(feature = "physics")]
+impl Presenter<Platformer> for PlatformerPresenter {
+    type WorldView = ();
+
+    fn title(&self, _game: &Platformer) -> String {
+        "gameengine :: Platformer".to_string()
+    }
+
+    fn preferred_window_size(&self) -> (u32, u32) {
+        (1180, 620)
+    }
+
+    fn on_window_event(
+        &mut self,
+        event: &WindowEvent,
+        _metrics: FrameMetrics,
+        _view: &RenderGameView<'_, Platformer, ()>,
+        actions: &mut dyn ActionSink<Platformer>,
+    ) {
+        self.apply_window_input(event, actions);
+    }
+
     fn populate_scene(
         &mut self,
         scene: &mut Scene2d,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, Platformer>,
+        view: &RenderGameView<'_, Platformer, ()>,
     ) {
         scene.set_clear_color(Color::from_rgb8(10, 18, 36));
         let observation = view.player_observation();
@@ -558,8 +572,6 @@ impl Presenter<Platformer> for PlatformerPresenter {
     }
 }
 
-#[cfg(feature = "physics")]
-impl ObservationPresenter<Platformer> for PlatformerPresenter {}
 
 #[cfg(feature = "physics")]
 /// Oracle/world presenter for platformer physics debugging.
@@ -583,6 +595,8 @@ impl PlatformerPhysicsPresenter {
 
 #[cfg(feature = "physics")]
 impl Presenter<Platformer> for PlatformerPhysicsPresenter {
+    type WorldView = <Platformer as OracleProjection>::WorldView;
+
     fn title(&self, _game: &Platformer) -> String {
         "gameengine :: Platformer Oracle Physics".to_string()
     }
@@ -591,24 +605,43 @@ impl Presenter<Platformer> for PlatformerPhysicsPresenter {
         (1240, 720)
     }
 
+    fn refresh_world_view<H: HistoryStore<Platformer>>(
+        session: &SessionKernel<Platformer, H>,
+    ) -> Option<Self::WorldView> {
+        Some(session.world_view())
+    }
+
     fn on_window_event(
         &mut self,
         event: &WindowEvent,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, Platformer>,
+        view: &RenderGameView<'_, Platformer, Self::WorldView>,
         actions: &mut dyn ActionSink<Platformer>,
     ) {
-        self.inner.on_window_event(event, metrics, view, actions);
+        // The inner observation presenter's input handling is view-agnostic;
+        // delegate via the shared helper.
+        let _ = (metrics, view);
+        self.inner.apply_window_input(event, actions);
     }
 
     fn populate_scene(
         &mut self,
         scene: &mut Scene2d,
         metrics: FrameMetrics,
-        view: &RenderGameView<'_, Platformer>,
+        view: &RenderGameView<'_, Platformer, Self::WorldView>,
     ) {
         scene.set_clear_color(Color::from_rgb8(14, 16, 22));
-        let world = view.world_view();
+        let Some(world) = view.world_view() else {
+            scene.text(
+                Point2::new(56.0, 28.0),
+                Rect::new(56.0, 28.0, metrics.width as f32 - 112.0, 64.0),
+                "Oracle physics view unavailable for this frame.",
+                20.0,
+                TEXT,
+                30,
+            );
+            return;
+        };
         let bounds = world.physics.bounds();
         let bodies = world.physics.bodies();
         let contacts = world.physics.contacts();
@@ -698,8 +731,6 @@ impl Presenter<Platformer> for PlatformerPhysicsPresenter {
     }
 }
 
-#[cfg(feature = "physics")]
-impl OraclePresenter<Platformer> for PlatformerPhysicsPresenter {}
 
 fn tictactoe_status(observation: &TicTacToeObservation, reward: i64, tick: u64) -> String {
     let headline = if observation.terminal {
@@ -802,6 +833,7 @@ mod tests {
         BlackjackPresenter, PlatformerPhysicsPresenter, PlatformerPresenter, TicTacToePresenter,
     };
     use crate::builtin::{Blackjack, Platformer, TicTacToe};
+    use crate::game::OracleProjection;
     use crate::render::{
         FrameMetrics, Presenter, RealtimeDriver, RenderGameView, Scene2d, TickDriver,
         TurnBasedDriver,
@@ -825,7 +857,8 @@ mod tests {
     #[test]
     fn tictactoe_presenter_emits_scene() {
         let (driver, metrics) = tictactoe_view();
-        let cache = super::super::runtime::ViewCache::from_session(driver.session());
+        let cache: super::super::runtime::ViewCache<TicTacToe, ()> =
+            super::super::runtime::ViewCache::from_session(driver.session(), None);
         let view = RenderGameView::from_cache(driver.session().game(), &cache);
         let mut presenter = TicTacToePresenter::default();
         let mut scene = Scene2d::default();
@@ -842,7 +875,8 @@ mod tests {
             height: 720,
             scale_factor: 1.0,
         };
-        let cache = super::super::runtime::ViewCache::from_session(driver.session());
+        let cache: super::super::runtime::ViewCache<Blackjack, ()> =
+            super::super::runtime::ViewCache::from_session(driver.session(), None);
         let view = RenderGameView::from_cache(driver.session().game(), &cache);
         let mut presenter = BlackjackPresenter::default();
         let mut scene = Scene2d::default();
@@ -860,15 +894,26 @@ mod tests {
             height: 620,
             scale_factor: 1.0,
         };
-        let cache = super::super::runtime::ViewCache::from_session(driver.session());
-        let view = RenderGameView::from_cache(driver.session().game(), &cache);
+        // Observation cache: empty world-view slot of type `()`.
+        let obs_cache: super::super::runtime::ViewCache<Platformer, ()> =
+            super::super::runtime::ViewCache::from_session(driver.session(), None);
+        let obs_view = RenderGameView::from_cache(driver.session().game(), &obs_cache);
+        // Oracle cache: populated with an actual `PlatformerWorldView` snapshot.
+        let oracle_cache: super::super::runtime::ViewCache<
+            Platformer,
+            <Platformer as OracleProjection>::WorldView,
+        > = super::super::runtime::ViewCache::from_session(
+            driver.session(),
+            Some(driver.session().world_view()),
+        );
+        let oracle_view = RenderGameView::from_cache(driver.session().game(), &oracle_cache);
         let mut observation_presenter = PlatformerPresenter::default();
         let mut oracle_presenter =
             PlatformerPhysicsPresenter::new(crate::builtin::PlatformerConfig::default());
         let mut observation_scene = Scene2d::default();
         let mut oracle_scene = Scene2d::default();
-        observation_presenter.populate_scene(&mut observation_scene, metrics, &view);
-        oracle_presenter.populate_scene(&mut oracle_scene, metrics, &view);
+        observation_presenter.populate_scene(&mut observation_scene, metrics, &obs_view);
+        oracle_presenter.populate_scene(&mut oracle_scene, metrics, &oracle_view);
         assert!(!observation_scene.panels.is_empty());
         assert!(!oracle_scene.panels.is_empty());
     }

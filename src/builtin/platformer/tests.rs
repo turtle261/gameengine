@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::env::DefaultEnvironment;
 use crate::core::observe::Observer;
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::session::Session;
 use crate::types::{PlayerAction, PlayerReward};
 use crate::verification::{
@@ -13,7 +13,7 @@ fn movement_clamps_at_walls() {
     let game = Platformer::default();
     let mut state = game.init(1);
     let mut rng = DeterministicRng::from_seed_and_stream(1, 1);
-    let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+    let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
     let mut actions = FixedVec::<PlayerAction<PlatformerAction>, 1>::default();
     actions
         .push(PlayerAction {
@@ -47,7 +47,7 @@ fn berry_collection_is_idempotent() {
         .world
         .set_body_position(PLAYER_BODY_ID, game.config.player_center(1, 0));
     let mut rng = DeterministicRng::from_seed_and_stream(1, 1);
-    let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+    let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
     let mut actions = FixedVec::<PlayerAction<PlatformerAction>, 1>::default();
     actions
         .push(PlayerAction {
@@ -73,7 +73,7 @@ fn final_berry_terminates_with_bonus() {
         .world
         .set_body_position(PLAYER_BODY_ID, game.config.player_center(11, 0));
     let mut rng = DeterministicRng::from_seed_and_stream(9, 1);
-    let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+    let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
     let mut actions = FixedVec::<PlayerAction<PlatformerAction>, 1>::default();
     actions
         .push(PlayerAction {
@@ -125,7 +125,8 @@ fn verification_helpers_hold_for_jump() {
         .unwrap();
     assert_transition_contracts(&game, &state, &actions, 3);
     assert_observation_contracts(&game, &state);
-    assert_compact_roundtrip(&game, &PlatformerAction::Jump);
+    let params = game.default_params();
+    assert_compact_roundtrip(&game, &params, &PlatformerAction::Jump);
 }
 
 #[test]
@@ -146,7 +147,7 @@ fn parameterized_rewards_update_transition_and_compact_contracts() {
     };
     config.berry_y = config.jump_delta;
     let game = Platformer::default();
-    let spec = game.compact_spec_for_params(&config);
+    let spec = game.compact_spec_for(&config);
 
     let mut state = game.init_with_params(1, &config);
     state.remaining_berries = 1;
@@ -156,7 +157,7 @@ fn parameterized_rewards_update_transition_and_compact_contracts() {
         .set_body_position(PLAYER_BODY_ID, config.player_center(config.berry_xs[0], 0));
 
     let mut rng = DeterministicRng::from_seed_and_stream(1, 1);
-    let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+    let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
     let mut actions = FixedVec::<PlayerAction<PlatformerAction>, 1>::default();
     actions
         .push(PlayerAction {
@@ -185,6 +186,6 @@ fn parameterized_environment_uses_wide_observation_schema() {
     let mut env =
         DefaultEnvironment::<Platformer, 1>::new(Platformer::default(), 3, Observer::Player(0));
     let packet = env.reset_with_params(3, config).unwrap();
-    assert_eq!(packet.words().len(), 1);
-    assert!(packet.words()[0] > 4095);
+    assert_eq!(packet.observation_bits.words().len(), 1);
+    assert!(packet.observation_bits.words()[0] > 4095);
 }

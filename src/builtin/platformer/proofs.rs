@@ -1,6 +1,6 @@
 use super::{ALL_BERRIES_MASK, PLAYER_BODY_ID, Platformer, PlatformerAction, PlatformerState};
 use crate::buffer::FixedVec;
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::types::PlayerAction;
 
 #[kani::proof]
@@ -15,7 +15,7 @@ fn wall_clamps_hold_for_all_edge_positions() {
         .set_body_position(PLAYER_BODY_ID, game.config.player_center(x, 0));
     let mut rng = crate::rng::DeterministicRng::from_seed(1);
     let mut outcome =
-        crate::types::StepOutcome::<FixedVec<crate::types::PlayerReward, 1>>::default();
+        crate::types::KernelOutcome::<FixedVec<crate::types::PlayerReward, 1>>::default();
     let mut actions = FixedVec::<PlayerAction<PlatformerAction>, 1>::default();
     actions
         .push(PlayerAction {

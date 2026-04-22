@@ -1,5 +1,5 @@
 use super::*;
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::session::Session;
 use crate::types::PlayerAction;
 use crate::verification::{
@@ -78,5 +78,5 @@ fn verification_helpers_hold_for_opening_move() {
         })
         .unwrap();
     assert_transition_contracts(&game, &state, &actions, 7);
-    assert_compact_roundtrip(&game, &TicTacToeAction(0));
+    assert_compact_roundtrip(&game, &game.default_params(), &TicTacToeAction(0));
 }

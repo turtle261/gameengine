@@ -414,7 +414,11 @@ pub fn set_trigger_mask_deferred<const BODIES: usize, const CONTACTS: usize>(
     }
 }
 
-/// Collect active trigger bits contacted by `actor_id`, deactivating collected trigger bodies.
+/// Collect active trigger bits contacted by `actor_id`.
+///
+/// This helper updates only `remaining_mask` and returns the number of collected
+/// triggers. Caller code is responsible for applying any deferred trigger-body
+/// activity synchronization after collection.
 pub fn collect_actor_trigger_contacts<const BODIES: usize, const CONTACTS: usize>(
     world: &mut PhysicsWorld2d<BODIES, CONTACTS>,
     actor_id: u16,
@@ -433,7 +437,6 @@ pub fn collect_actor_trigger_contacts<const BODIES: usize, const CONTACTS: usize
         let trigger_id = first_trigger_id + index as u16;
         if (*remaining_mask & bit) != 0 && world.has_contact(actor_id, trigger_id) {
             *remaining_mask &= !bit;
-            world.set_body_active(trigger_id, false);
             collected += 1;
         }
         index += 1;

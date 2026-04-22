@@ -5,9 +5,9 @@ use core::hash::Hash;
 
 use crate::buffer::{Buffer, FixedVec};
 use crate::compact::{CompactError, CompactSpec};
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::rng::DeterministicRng;
-use crate::types::{PlayerAction, PlayerId, PlayerReward, Reward, Seed, StepOutcome};
+use crate::types::{PlayerAction, PlayerId, PlayerReward, Reward, Seed, KernelOutcome};
 
 /// Canonical acting player id used by single-player environments.
 pub const SOLO_PLAYER: PlayerId = 0;
@@ -73,8 +73,6 @@ pub trait SinglePlayerGame {
     type Action: Clone + Copy + Debug + Default + Eq + Hash + PartialEq;
     /// Canonical observation type.
     type Obs: Clone + Debug + Default + Eq + PartialEq;
-    /// Render/debug world view.
-    type WorldView: Clone + Debug + Default + Eq + PartialEq;
     /// Buffer type for legal actions.
     type ActionBuf: Buffer<Item = Self::Action> + Clone + Debug + Default + Eq + Hash + PartialEq;
     /// Buffer type for compact observation words.
@@ -102,19 +100,20 @@ pub trait SinglePlayerGame {
     fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
         self.observe_player(state)
     }
-    /// Build world/debug view.
-    fn world_view(&self, state: &Self::State) -> Self::WorldView;
     /// Apply one transition in-place from an optional single-player action.
     fn step_in_place(
         &self,
         state: &mut Self::State,
         action: Option<Self::Action>,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<SinglePlayerRewardBuf>,
+        out: &mut KernelOutcome<SinglePlayerRewardBuf>,
     );
 
-    /// Compact codec descriptor for actions, observations, and rewards.
-    fn compact_spec(&self) -> CompactSpec {
+    /// Compact codec descriptor for an explicit parameter bundle.
+    ///
+    /// Per specification §6.5 this is the primary method and defaults to
+    /// the parameter-independent zero-valued spec.
+    fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
         CompactSpec {
             action_count: 0,
             observation_bits: 0,
@@ -126,9 +125,12 @@ pub trait SinglePlayerGame {
         }
     }
 
-    /// Compact codec descriptor for an explicit parameter bundle.
-    fn compact_spec_for_params(&self, _params: &Self::Params) -> CompactSpec {
-        self.compact_spec()
+    /// Compact codec descriptor for default parameters.
+    ///
+    /// Per specification §6.5 `compact_spec()` means
+    /// `compact_spec_for(default_params())`.
+    fn compact_spec(&self) -> CompactSpec {
+        self.compact_spec_for(&self.default_params())
     }
 
     /// Encode an action into compact integer representation.
@@ -181,8 +183,11 @@ pub trait SinglePlayerGame {
         true
     }
 
-    /// Invariant for world/debug views.
-    fn world_view_invariant(&self, _state: &Self::State, _world: &Self::WorldView) -> bool {
+    /// Oracle-world invariant hook forwarded to `ContractSurface::oracle_world_view_invariant`.
+    ///
+    /// Single-player games that additionally implement [`OracleProjection`] should
+    /// override this hook to dispatch to their oracle `world_view` + `world_view_invariant`.
+    fn oracle_world_view_invariant(&self, _state: &Self::State) -> bool {
         true
     }
 
@@ -192,13 +197,13 @@ pub trait SinglePlayerGame {
         _pre: &Self::State,
         _action: Option<Self::Action>,
         _post: &Self::State,
-        _outcome: &StepOutcome<SinglePlayerRewardBuf>,
+        _outcome: &KernelOutcome<SinglePlayerRewardBuf>,
     ) -> bool {
         true
     }
 }
 
-impl<T> Game for T
+impl<T> GameAuthoring for T
 where
     T: SinglePlayerGame,
 {
@@ -206,7 +211,6 @@ where
     type State = T::State;
     type Action = T::Action;
     type Obs = T::Obs;
-    type WorldView = T::WorldView;
     type PlayerBuf = SinglePlayerBuf;
     type ActionBuf = T::ActionBuf;
     type JointActionBuf = SinglePlayerJointActionBuf<Self::Action>;
@@ -257,16 +261,12 @@ where
         <T as SinglePlayerGame>::observe_spectator(self, state)
     }
 
-    fn world_view(&self, state: &Self::State) -> Self::WorldView {
-        <T as SinglePlayerGame>::world_view(self, state)
-    }
-
     fn step_in_place(
         &self,
         state: &mut Self::State,
         joint_actions: &Self::JointActionBuf,
         rng: &mut DeterministicRng,
-        out: &mut StepOutcome<Self::RewardBuf>,
+        out: &mut KernelOutcome<Self::RewardBuf>,
     ) {
         <T as SinglePlayerGame>::step_in_place(
             self,
@@ -281,8 +281,8 @@ where
         <T as SinglePlayerGame>::compact_spec(self)
     }
 
-    fn compact_spec_for_params(&self, params: &Self::Params) -> CompactSpec {
-        <T as SinglePlayerGame>::compact_spec_for_params(self, params)
+    fn compact_spec_for(&self, params: &Self::Params) -> CompactSpec {
+        <T as SinglePlayerGame>::compact_spec_for(self, params)
     }
 
     fn encode_action(&self, action: &Self::Action) -> u64 {
@@ -330,8 +330,8 @@ where
         <T as SinglePlayerGame>::spectator_observation_invariant(self, state, observation)
     }
 
-    fn world_view_invariant(&self, state: &Self::State, world: &Self::WorldView) -> bool {
-        <T as SinglePlayerGame>::world_view_invariant(self, state, world)
+    fn oracle_world_view_invariant(&self, state: &Self::State) -> bool {
+        <T as SinglePlayerGame>::oracle_world_view_invariant(self, state)
     }
 
     fn transition_postcondition(
@@ -339,7 +339,7 @@ where
         pre: &Self::State,
         actions: &Self::JointActionBuf,
         post: &Self::State,
-        outcome: &StepOutcome<Self::RewardBuf>,
+        outcome: &KernelOutcome<Self::RewardBuf>,
     ) -> bool {
         <T as SinglePlayerGame>::transition_postcondition(
             self,
@@ -350,3 +350,4 @@ where
         )
     }
 }
+

@@ -1,6 +1,6 @@
 //! Platformer world/debug view types and physics oracle adapter.
 
-use crate::game::Game;
+use crate::game::{GameKernel, OracleProjection};
 use crate::math::{Aabb2, StrictF64};
 use crate::physics::{Contact2d, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d};
 

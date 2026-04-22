@@ -4,7 +4,7 @@ use crate::buffer::Buffer;
 use crate::proof::model::RefinementWitness;
 use crate::rng::DeterministicRng;
 use crate::session::{FixedHistory, SessionKernel};
-use crate::types::{ReplayStep, Seed, StepOutcome};
+use crate::types::{SessionStepRecord, Seed, KernelOutcome};
 
 /// Checks that runtime initialization agrees with the executable proof model.
 pub fn assert_model_init_refinement<G: RefinementWitness>(
@@ -49,10 +49,7 @@ pub fn assert_model_observation_refinement<G: RefinementWitness>(game: &G, state
     assert!(game.safety_spectator_observation_invariant(state, &spectator));
     assert!(game.observation_refines_model(&spectator, &model_spectator));
 
-    let world = game.world_view(state);
-    let model_world = game.model_world_view(&model);
-    assert!(game.safety_world_view_invariant(state, &world));
-    assert!(game.world_view_refines_model(&world, &model_world));
+    game.assert_world_refinement_if_present(state, &model);
 }
 
 /// Checks that one runtime transition agrees with the executable proof model.
@@ -71,8 +68,8 @@ pub fn assert_model_step_refinement<G: RefinementWitness>(
     let mut model_state = game.runtime_state_to_model(pre);
     let mut runtime_rng = DeterministicRng::from_seed_and_stream(seed, 99);
     let mut model_rng = runtime_rng;
-    let mut runtime_outcome = StepOutcome::<G::RewardBuf>::default();
-    let mut model_outcome = StepOutcome::<G::RewardBuf>::default();
+    let mut runtime_outcome = KernelOutcome::<G::RewardBuf>::default();
+    let mut model_outcome = KernelOutcome::<G::RewardBuf>::default();
 
     game.step_in_place(
         &mut runtime_state,
@@ -103,7 +100,7 @@ pub fn assert_model_replay_refinement<G>(
     trace: &[G::JointActionBuf],
 ) where
     G: RefinementWitness + Clone,
-    ReplayStep<G::JointActionBuf, G::RewardBuf>: Default,
+    SessionStepRecord<G::JointActionBuf, G::RewardBuf>: Default,
 {
     type ProofHistory<T> = FixedHistory<T, 8, 4, 1>;
 
@@ -117,24 +114,22 @@ pub fn assert_model_replay_refinement<G>(
             break;
         }
         let outcome = session.step_with_joint_actions(actions).clone();
-        let mut model_outcome = StepOutcome::<G::RewardBuf>::default();
+        let mut model_outcome = KernelOutcome::<G::RewardBuf>::default();
         game.model_step_in_place(
             &mut model_state,
             actions,
             &mut model_rng,
             &mut model_outcome,
         );
-        model_outcome.tick = session.current_tick();
         assert_eq!(outcome, model_outcome);
         assert_eq!(session.rng(), model_rng);
         assert!(game.state_refines_model(session.state(), &model_state));
         assert_model_observation_refinement(&game, session.state());
 
         let recorded = &session.trace().steps[(session.current_tick() - 1) as usize];
-        assert_eq!(recorded.tick, outcome.tick);
+        assert_eq!(recorded.tick, session.current_tick());
         assert_eq!(&recorded.actions, actions);
-        assert_eq!(&recorded.rewards, &outcome.rewards);
-        assert_eq!(recorded.termination, outcome.termination);
+        assert_eq!(&recorded.outcome, &outcome);
     }
 
     let executed_ticks = session.trace().len() as u64;
@@ -150,7 +145,7 @@ pub fn assert_model_replay_refinement<G>(
         let mut replay_rng = DeterministicRng::from_seed_and_stream(seed, 1);
         let mut replay_tick = 0usize;
         while replay_tick < target_tick as usize {
-            let mut replay_outcome = StepOutcome::<G::RewardBuf>::default();
+            let mut replay_outcome = KernelOutcome::<G::RewardBuf>::default();
             game.model_step_in_place(
                 &mut replay_state,
                 &trace[replay_tick],

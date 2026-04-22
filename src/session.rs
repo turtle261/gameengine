@@ -4,10 +4,10 @@ use core::fmt::Debug;
 use std::collections::VecDeque;
 
 use crate::buffer::{Buffer, default_array};
-use crate::game::Game;
+use crate::game::{Game, OracleProjection};
 use crate::policy::Policy;
 use crate::rng::DeterministicRng;
-use crate::types::{DynamicReplayTrace, PlayerAction, ReplayTrace, Seed, StepOutcome, Tick};
+use crate::types::{DynamicReplayTrace, PlayerAction, ReplayTrace, Seed, KernelOutcome, Tick};
 
 /// Saved checkpoint used by history implementations for rewind.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
@@ -36,7 +36,7 @@ pub trait HistoryStore<G: Game>: Clone {
         state: &G::State,
         rng: DeterministicRng,
         actions: &G::JointActionBuf,
-        outcome: &StepOutcome<G::RewardBuf>,
+        outcome: &KernelOutcome<G::RewardBuf>,
     );
     /// Returns recorded transition count.
     fn len(&self) -> usize;
@@ -146,10 +146,9 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
         state: &G::State,
         rng: DeterministicRng,
         actions: &G::JointActionBuf,
-        outcome: &StepOutcome<G::RewardBuf>,
+        outcome: &KernelOutcome<G::RewardBuf>,
     ) {
-        self.trace
-            .record(tick, actions, &outcome.rewards, outcome.termination);
+        self.trace.record(tick, actions, outcome);
         self.store_snapshot(tick, state, rng);
     }
 
@@ -181,7 +180,7 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
                 (self.initial_state.clone(), self.initial_rng, 0)
             };
 
-        let mut outcome = StepOutcome::<G::RewardBuf>::default();
+        let mut outcome = KernelOutcome::<G::RewardBuf>::default();
         let mut index = start_tick as usize;
         while index < self.trace.steps.len() {
             let step = &self.trace.steps[index];
@@ -201,7 +200,7 @@ impl<G: Game, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct FixedHistory<G: Game, const LOG: usize, const SNAPSHOTS: usize, const SNAP_EVERY: usize>
 where
-    crate::types::ReplayStep<G::JointActionBuf, G::RewardBuf>: Default,
+    crate::types::SessionStepRecord<G::JointActionBuf, G::RewardBuf>: Default,
 {
     seed: Seed,
     initial_state: G::State,
@@ -214,7 +213,7 @@ where
 impl<G: Game, const LOG: usize, const SNAPSHOTS: usize, const SNAP_EVERY: usize> Clone
     for FixedHistory<G, LOG, SNAPSHOTS, SNAP_EVERY>
 where
-    crate::types::ReplayStep<G::JointActionBuf, G::RewardBuf>: Default,
+    crate::types::SessionStepRecord<G::JointActionBuf, G::RewardBuf>: Default,
 {
     fn clone(&self) -> Self {
         Self {
@@ -231,7 +230,7 @@ where
 impl<G: Game, const LOG: usize, const SNAPSHOTS: usize, const SNAP_EVERY: usize>
     FixedHistory<G, LOG, SNAPSHOTS, SNAP_EVERY>
 where
-    crate::types::ReplayStep<G::JointActionBuf, G::RewardBuf>: Default,
+    crate::types::SessionStepRecord<G::JointActionBuf, G::RewardBuf>: Default,
 {
     fn store_snapshot(&mut self, tick: Tick, state: &G::State, rng: DeterministicRng) {
         if SNAPSHOTS == 0 || SNAP_EVERY == 0 {
@@ -270,7 +269,7 @@ where
 impl<G: Game, const LOG: usize, const SNAPSHOTS: usize, const SNAP_EVERY: usize> HistoryStore<G>
     for FixedHistory<G, LOG, SNAPSHOTS, SNAP_EVERY>
 where
-    crate::types::ReplayStep<G::JointActionBuf, G::RewardBuf>: Default,
+    crate::types::SessionStepRecord<G::JointActionBuf, G::RewardBuf>: Default,
 {
     type Trace = ReplayTrace<G::JointActionBuf, G::RewardBuf, LOG>;
 
@@ -300,10 +299,9 @@ where
         state: &G::State,
         rng: DeterministicRng,
         actions: &G::JointActionBuf,
-        outcome: &StepOutcome<G::RewardBuf>,
+        outcome: &KernelOutcome<G::RewardBuf>,
     ) {
-        self.trace
-            .record(tick, actions, &outcome.rewards, outcome.termination);
+        self.trace.record(tick, actions, outcome);
         self.store_snapshot(tick, state, rng);
     }
 
@@ -335,7 +333,7 @@ where
                 (self.initial_state.clone(), self.initial_rng, 0)
             };
 
-        let mut outcome = StepOutcome::<G::RewardBuf>::default();
+        let mut outcome = KernelOutcome::<G::RewardBuf>::default();
         let steps = self.trace.steps.as_slice();
         let mut index = start_tick as usize;
         while index < steps.len() {
@@ -364,7 +362,7 @@ pub struct SessionKernel<G: Game, H: HistoryStore<G>> {
     players_to_act: G::PlayerBuf,
     legal_actions: G::ActionBuf,
     joint_actions: G::JointActionBuf,
-    outcome: StepOutcome<G::RewardBuf>,
+    outcome: KernelOutcome<G::RewardBuf>,
 }
 
 /// Default dynamic-history session alias.
@@ -400,7 +398,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             players_to_act: G::PlayerBuf::default(),
             legal_actions: G::ActionBuf::default(),
             joint_actions: G::JointActionBuf::default(),
-            outcome: StepOutcome::default(),
+            outcome: KernelOutcome::default(),
         }
     }
 
@@ -419,6 +417,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         );
         self.params = params;
         self.state = self.game.init_with_params(seed, &self.params);
+        assert!(self.game.state_invariant(&self.state));
         self.rng = DeterministicRng::from_seed_and_stream(seed, 1);
         self.tick = 0;
         self.history.reset(seed, &self.state, self.rng);
@@ -455,7 +454,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
 
     /// Returns the active compact codec descriptor for current params.
     pub fn compact_spec(&self) -> crate::compact::CompactSpec {
-        self.game.compact_spec_for_params(&self.params)
+        self.game.compact_spec_for(&self.params)
     }
 
     /// Returns immutable trace view.
@@ -483,11 +482,6 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         self.game.observe_spectator(&self.state)
     }
 
-    /// Returns world/debug view.
-    pub fn world_view(&self) -> G::WorldView {
-        self.game.world_view(&self.state)
-    }
-
     /// Returns legal actions for `player` in current state.
     pub fn legal_actions_for(&mut self, player: usize) -> &[G::Action] {
         self.game
@@ -505,7 +499,6 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
         self.game
             .step_in_place(&mut self.state, actions, &mut self.rng, &mut self.outcome);
         self.tick += 1;
-        self.outcome.tick = self.tick;
     }
 
     #[inline(always)]
@@ -542,7 +535,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     }
 
     #[inline(always)]
-    fn step_staged_joint_actions(&mut self) -> &StepOutcome<G::RewardBuf> {
+    fn step_staged_joint_actions(&mut self) -> &KernelOutcome<G::RewardBuf> {
         assert!(
             !self.game.is_terminal(&self.state),
             "cannot step a terminal session",
@@ -555,7 +548,6 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             &mut self.outcome,
         );
         self.tick += 1;
-        self.outcome.tick = self.tick;
         self.history.record(
             self.tick,
             &self.state,
@@ -567,7 +559,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     }
 
     #[inline(always)]
-    fn step_staged_joint_actions_checked(&mut self) -> &StepOutcome<G::RewardBuf> {
+    fn step_staged_joint_actions_checked(&mut self) -> &KernelOutcome<G::RewardBuf> {
         assert!(
             !self.game.is_terminal(&self.state),
             "cannot step a terminal session",
@@ -586,7 +578,6 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             &mut self.outcome,
         );
         self.tick += 1;
-        self.outcome.tick = self.tick;
 
         assert!(self.game.state_invariant(&self.state));
         let spectator = self.game.observe_spectator(&self.state);
@@ -594,8 +585,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             self.game
                 .spectator_observation_invariant(&self.state, &spectator)
         );
-        let world = self.game.world_view(&self.state);
-        assert!(self.game.world_view_invariant(&self.state, &world));
+        assert!(self.game.oracle_world_view_invariant(&self.state));
         for player in 0..self.game.player_count() {
             let observation = self.game.observe_player(&self.state, player);
             assert!(
@@ -621,7 +611,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     }
 
     /// Steps using externally supplied action slice.
-    pub fn step(&mut self, actions: &[PlayerAction<G::Action>]) -> &StepOutcome<G::RewardBuf> {
+    pub fn step(&mut self, actions: &[PlayerAction<G::Action>]) -> &KernelOutcome<G::RewardBuf> {
         self.joint_actions.clear();
         self.joint_actions
             .extend_from_slice(actions)
@@ -633,7 +623,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     pub fn step_checked(
         &mut self,
         actions: &[PlayerAction<G::Action>],
-    ) -> &StepOutcome<G::RewardBuf> {
+    ) -> &KernelOutcome<G::RewardBuf> {
         self.joint_actions.clear();
         self.joint_actions
             .extend_from_slice(actions)
@@ -646,7 +636,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     pub fn step_with_joint_actions(
         &mut self,
         actions: &G::JointActionBuf,
-    ) -> &StepOutcome<G::RewardBuf> {
+    ) -> &KernelOutcome<G::RewardBuf> {
         self.step_core(actions);
         self.record_step(actions);
         &self.outcome
@@ -656,7 +646,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     pub fn step_with_joint_actions_checked(
         &mut self,
         actions: &G::JointActionBuf,
-    ) -> &StepOutcome<G::RewardBuf> {
+    ) -> &KernelOutcome<G::RewardBuf> {
         assert!(self.game.state_invariant(&self.state));
         for action in actions.as_slice() {
             assert!(self.game.action_invariant(&action.action));
@@ -671,8 +661,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
             self.game
                 .spectator_observation_invariant(&self.state, &spectator)
         );
-        let world = self.game.world_view(&self.state);
-        assert!(self.game.world_view_invariant(&self.state, &world));
+        assert!(self.game.oracle_world_view_invariant(&self.state));
         for player in 0..self.game.player_count() {
             let observation = self.game.observe_player(&self.state, player);
             assert!(
@@ -695,7 +684,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     pub fn step_with_policies(
         &mut self,
         policies: &mut [&mut dyn Policy<G>],
-    ) -> &StepOutcome<G::RewardBuf> {
+    ) -> &KernelOutcome<G::RewardBuf> {
         self.collect_policy_actions(policies);
         self.step_staged_joint_actions()
     }
@@ -704,7 +693,7 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     pub fn step_with_policies_checked(
         &mut self,
         policies: &mut [&mut dyn Policy<G>],
-    ) -> &StepOutcome<G::RewardBuf> {
+    ) -> &KernelOutcome<G::RewardBuf> {
         self.collect_policy_actions(policies);
         self.step_staged_joint_actions_checked()
     }
@@ -767,12 +756,19 @@ impl<G: Game, H: HistoryStore<G>> SessionKernel<G, H> {
     }
 }
 
+impl<G: Game + OracleProjection, H: HistoryStore<G>> SessionKernel<G, H> {
+    /// Returns world/debug view.
+    pub fn world_view(&self) -> <G as OracleProjection>::WorldView {
+        self.game.world_view(&self.state)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::buffer::FixedVec;
-    use crate::game::Game;
+    use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
 
     use super::{DynamicHistory, SessionKernel};
 
@@ -784,12 +780,11 @@ mod tests {
         tick: u16,
     }
 
-    impl Game for SpinnerGame {
+    impl GameAuthoring for SpinnerGame {
         type Params = ();
         type State = SpinnerState;
         type Action = u8;
         type Obs = SpinnerState;
-        type WorldView = SpinnerState;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -835,16 +830,12 @@ mod tests {
             *state
         }
 
-        fn world_view(&self, state: &Self::State) -> Self::WorldView {
-            *state
-        }
-
         fn step_in_place(
             &self,
             state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             state.tick += 1;
             out.rewards
@@ -881,9 +872,9 @@ mod tests {
 #[cfg(kani)]
 mod proofs {
     use crate::buffer::FixedVec;
-    use crate::game::Game;
+    use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
 
     use super::SessionKernel;
 
@@ -896,12 +887,11 @@ mod proofs {
         terminal: bool,
     }
 
-    impl Game for CounterGame {
+    impl GameAuthoring for CounterGame {
         type Params = ();
         type State = CounterState;
         type Action = u8;
         type Obs = CounterState;
-        type WorldView = CounterState;
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 2>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -953,16 +943,12 @@ mod proofs {
             *state
         }
 
-        fn world_view(&self, state: &Self::State) -> Self::WorldView {
-            *state
-        }
-
         fn step_in_place(
             &self,
             state: &mut Self::State,
             joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             let delta = if joint_actions.is_empty() {
                 0

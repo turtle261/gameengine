@@ -12,8 +12,8 @@ use gameengine::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction
 #[cfg(feature = "physics")]
 use gameengine::builtin::{Platformer, PlatformerAction};
 use gameengine::{
-    CompactSpec, DeterministicRng, FixedVec, Game, PlayerAction, PlayerReward, Session,
-    StepOutcome, stable_hash,
+    CompactSpec, DeterministicRng, FixedVec, Game, GameAuthoring, PlayerAction, PlayerReward,
+    Session, KernelOutcome, stable_hash,
 };
 
 struct CountingAllocator;
@@ -397,7 +397,7 @@ fn step_hot_paths_do_not_allocate_after_init() {
     let game = TicTacToe;
     let mut state = game.init(7);
     let mut rng = DeterministicRng::from_seed_and_stream(7, 1);
-    let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+    let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
     let mut action = FixedVec::<PlayerAction<TicTacToeAction>, 1>::default();
     action
         .push(PlayerAction {
@@ -413,7 +413,7 @@ fn step_hot_paths_do_not_allocate_after_init() {
     let game = Blackjack;
     let mut state = game.init(11);
     let mut rng = DeterministicRng::from_seed_and_stream(11, 1);
-    let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+    let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
     let mut action = FixedVec::<PlayerAction<BlackjackAction>, 1>::default();
     action
         .push(PlayerAction {
@@ -431,7 +431,7 @@ fn step_hot_paths_do_not_allocate_after_init() {
         let game = Platformer::default();
         let mut state = game.init(3);
         let mut rng = DeterministicRng::from_seed_and_stream(3, 1);
-        let mut outcome = StepOutcome::<FixedVec<PlayerReward, 1>>::default();
+        let mut outcome = KernelOutcome::<FixedVec<PlayerReward, 1>>::default();
         let mut action = FixedVec::<PlayerAction<PlatformerAction>, 1>::default();
         action
             .push(PlayerAction {
@@ -510,4 +510,52 @@ fn parallel_replay_matches_serial() {
         })
         .collect();
     assert_eq!(parallel, serial);
+}
+
+#[test]
+fn canonical_history_serialization_matches_specification_bit_layout() {
+    use gameengine::core::env::{ActionToken, DefaultEnvironment};
+    use gameengine::core::observe::Observer;
+    use gameengine::{AixiEnvironment, BitStream, serialize_action, serialize_percept};
+
+    // Reset a fresh TicTacToe environment and serialize the first percept.
+    // TicTacToe's compact spec: action_count=9, observation_bits=18,
+    // observation_stream_len=1 (=> observation_word_bits=18),
+    // reward_bits=3, min_reward=-3, max_reward=2, reward_offset=3.
+    let mut env: DefaultEnvironment<TicTacToe, 1> =
+        DefaultEnvironment::new(TicTacToe, 7, Observer::Player(0));
+    // Compact spec is fully determined by (game, params) — per specification
+    // §6.5, `compact_spec()` equals `compact_spec_for(default_params())`.
+    let spec: CompactSpec = TicTacToe.compact_spec();
+    assert_eq!(spec.action_bits(), 4);
+    assert_eq!(spec.observation_word_bits(), 18);
+    assert_eq!(spec.reward_word_bits(), 3);
+
+    let reset: gameengine::Percept<1> = env.reset_seed(7).expect("reset");
+    let mut stream: BitStream = BitStream::new();
+    serialize_percept(&mut stream, &spec, &reset);
+    // One 18-bit observation word + 3-bit reward + 1 terminal bit = 22 bits.
+    assert_eq!(stream.bit_len(), 22);
+    // Reset percept has reward=0 (encoded=reward_offset=3) and terminal=false.
+    // Reward field occupies bits [18..21], terminal bit at position 21.
+    // Extract and confirm:
+    let mut reward_encoded: u64 = 0;
+    for i in 0..3 {
+        if stream.get_bit(18 + i) {
+            reward_encoded |= 1u64 << i;
+        }
+    }
+    assert_eq!(reward_encoded, 3);
+    assert!(!stream.get_bit(21));
+
+    // Serialize the action `4` (center move) and confirm its 4-bit LSB layout.
+    let token: ActionToken = ActionToken::try_new(4, 9).expect("alphabet");
+    let mut action_stream: BitStream = BitStream::new();
+    serialize_action(&mut action_stream, &spec, token);
+    assert_eq!(action_stream.bit_len(), 4);
+    // 4 = 0b0100 -> LSB-first bits: [0, 0, 1, 0].
+    assert!(!action_stream.get_bit(0));
+    assert!(!action_stream.get_bit(1));
+    assert!(action_stream.get_bit(2));
+    assert!(!action_stream.get_bit(3));
 }

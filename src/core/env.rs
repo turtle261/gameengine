@@ -1,10 +1,11 @@
-//! Compact environment wrapper for infotheory-compatible stepping.
+//! AIXI-native compact environment front door and compatibility wrappers.
 
 use core::fmt;
 
 use crate::buffer::{Buffer, FixedVec};
-use crate::compact::CompactError;
-use crate::core::observe::{Observe, Observer};
+use crate::compact::{CompactError, CompactSpec};
+use crate::core::observe::Observer;
+use crate::game::Game;
 use crate::session::{HistoryStore, SessionKernel};
 use crate::types::{PlayerAction, PlayerId, Reward, Seed};
 
@@ -39,17 +40,75 @@ pub struct CompactReward {
     pub encoded: u64,
 }
 
-/// One environment step result with compact observation and reward.
+/// One agent-facing percept token with compact observation and reward.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct EnvStep<const MAX_WORDS: usize> {
-    /// Encoded observation packet after the step.
+pub struct Percept<const MAX_WORDS: usize> {
+    /// Encoded observation packet for this percept token.
     pub observation_bits: BitPacket<MAX_WORDS>,
     /// Raw and compact reward representation.
     pub reward: CompactReward,
-    /// True if the episode has reached terminal state.
+    /// True if the percept denotes a terminal state.
     pub terminated: bool,
-    /// True if the episode was truncated externally.
-    pub truncated: bool,
+}
+
+/// Backwards-compatible name for one emitted percept token.
+pub type EnvStep<const MAX_WORDS: usize> = Percept<MAX_WORDS>;
+
+/// Error returned when constructing a checked external action token.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ActionTokenError {
+    /// Encoded symbol is outside the finite external action alphabet.
+    OutOfAlphabet {
+        /// Rejected compact action symbol.
+        encoded: u64,
+        /// Declared compact action alphabet size.
+        action_count: u64,
+    },
+}
+
+impl fmt::Display for ActionTokenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutOfAlphabet {
+                encoded,
+                action_count,
+            } => write!(
+                f,
+                "encoded action {encoded} is outside alphabet 0..{action_count}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ActionTokenError {}
+
+/// Checked external action symbol consumed by the AIXI front door.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ActionToken {
+    encoded: u64,
+}
+
+impl ActionToken {
+    /// Creates a checked token for the given action alphabet size.
+    pub fn try_new(encoded: u64, action_count: u64) -> Result<Self, ActionTokenError> {
+        if encoded >= action_count {
+            return Err(ActionTokenError::OutOfAlphabet {
+                encoded,
+                action_count,
+            });
+        }
+        Ok(Self { encoded })
+    }
+
+    /// Creates a checked token using the current compact spec.
+    pub fn from_spec(spec: &CompactSpec, encoded: u64) -> Result<Self, ActionTokenError> {
+        Self::try_new(encoded, spec.action_count)
+    }
+
+    /// Returns the compact action symbol carried by this token.
+    pub const fn encoded(self) -> u64 {
+        self.encoded
+    }
 }
 
 /// Errors produced by compact environment reset/step operations.
@@ -57,11 +116,6 @@ pub struct EnvStep<const MAX_WORDS: usize> {
 pub enum EnvError {
     /// Step was requested after the session already terminated.
     SessionTerminated,
-    /// Action bit pattern does not decode into a legal action value.
-    InvalidActionEncoding {
-        /// Raw encoded action word.
-        encoded: u64,
-    },
     /// Observation encoding exceeded configured packet capacity.
     ObservationOverflow {
         /// Number of words requested by the game encoder.
@@ -88,13 +142,6 @@ pub enum EnvError {
         /// Canonical compact constraint violation details.
         reason: CompactError,
     },
-    /// Selected agent player id is outside game player range.
-    InvalidAgentPlayer {
-        /// Requested player id.
-        player: PlayerId,
-        /// Number of players exposed by the game.
-        player_count: usize,
-    },
     /// Parameter bundle was rejected by the game's parameter invariant.
     InvalidParameters {
         /// Stable machine-readable game name.
@@ -106,9 +153,6 @@ impl fmt::Display for EnvError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SessionTerminated => write!(f, "cannot step a terminal session"),
-            Self::InvalidActionEncoding { encoded } => {
-                write!(f, "invalid compact action encoding: {encoded}")
-            }
             Self::ObservationOverflow {
                 actual_words,
                 max_words,
@@ -130,13 +174,6 @@ impl fmt::Display for EnvError {
             Self::InvalidRewardEncoding { reason } => {
                 write!(f, "reward does not satisfy compact schema: {reason}")
             }
-            Self::InvalidAgentPlayer {
-                player,
-                player_count,
-            } => write!(
-                f,
-                "agent player {player} is outside player range 0..{player_count}"
-            ),
             Self::InvalidParameters { game } => {
                 write!(f, "invalid parameter bundle for game `{game}`")
             }
@@ -146,34 +183,41 @@ impl fmt::Display for EnvError {
 
 impl std::error::Error for EnvError {}
 
-/// Minimal infotheory-compatible compact environment interface.
-pub trait InfotheoryEnvironment<const MAX_WORDS: usize> {
+/// Primary AIXI-native environment interface.
+pub trait AixiEnvironment<const MAX_WORDS: usize> {
     /// Parameter bundle used to initialize/reset environment state.
     type Params;
 
-    /// Resets environment state and returns initial compact observation.
-    fn reset_seed(&mut self, seed: Seed) -> Result<BitPacket<MAX_WORDS>, EnvError>;
+    /// Resets environment state and returns initial percept token.
+    fn reset_seed(&mut self, seed: Seed) -> Result<Percept<MAX_WORDS>, EnvError>;
 
-    /// Resets environment state from explicit params and returns compact observation.
+    /// Resets environment state from explicit params and returns initial percept.
     fn reset_seed_with_params(
         &mut self,
         seed: Seed,
         params: Self::Params,
-    ) -> Result<BitPacket<MAX_WORDS>, EnvError>;
+    ) -> Result<Percept<MAX_WORDS>, EnvError>;
 
-    /// Steps environment using compact action bits.
-    fn step_bits(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError>;
+    /// Steps environment using a checked external action token.
+    fn step(&mut self, action: ActionToken) -> Result<Percept<MAX_WORDS>, EnvError>;
+}
+
+/// Historical compatibility alias for the same AIXI-native contract.
+pub trait InfotheoryEnvironment<const MAX_WORDS: usize>: AixiEnvironment<MAX_WORDS> {}
+
+impl<T, const MAX_WORDS: usize> InfotheoryEnvironment<MAX_WORDS> for T where
+    T: AixiEnvironment<MAX_WORDS>
+{
 }
 
 /// Generic environment adapter over `SessionKernel` and compact codecs.
 #[derive(Clone, Debug)]
 pub struct Environment<G, H, const MAX_WORDS: usize>
 where
-    G: Observe,
+    G: Game,
     H: HistoryStore<G>,
 {
     session: SessionKernel<G, H>,
-    observer: Observer,
     agent_player: PlayerId,
 }
 
@@ -183,7 +227,7 @@ pub type DefaultEnvironment<G, const MAX_WORDS: usize = 16> =
 
 impl<G, H, const MAX_WORDS: usize> Environment<G, H, MAX_WORDS>
 where
-    G: Observe,
+    G: Game,
     H: HistoryStore<G>,
 {
     fn validate_params(game: &G, params: &G::Params) -> Result<(), EnvError> {
@@ -194,118 +238,159 @@ where
         }
     }
 
-    /// Creates a new compact environment initialized with explicit params.
+    fn validate_player(game: &G, player: PlayerId) -> Result<(), EnvError> {
+        let player_count = game.player_count();
+        if player >= player_count {
+            let _ = player_count;
+            return Err(EnvError::InvalidParameters { game: game.name() });
+        }
+        Ok(())
+    }
+
+    /// Creates a new compact environment initialized with explicit params and agent id.
+    pub fn try_new_with_agent_params(
+        game: G,
+        seed: Seed,
+        agent_player: PlayerId,
+        params: G::Params,
+    ) -> Result<Self, EnvError> {
+        Self::validate_params(&game, &params)?;
+        Self::validate_player(&game, agent_player)?;
+        Ok(Self {
+            session: SessionKernel::new_with_params(game, seed, params),
+            agent_player,
+        })
+    }
+
+    /// Creates a new compact environment initialized with explicit params and agent id.
+    pub fn new_with_agent_params(
+        game: G,
+        seed: Seed,
+        agent_player: PlayerId,
+        params: G::Params,
+    ) -> Self {
+        Self::try_new_with_agent_params(game, seed, agent_player, params)
+            .expect("invalid parameter bundle for compact environment")
+    }
+
+    /// Creates a new compact environment from an observer selector.
+    ///
+    /// Compatibility wrapper: `Observer::Spectator` selects agent player `0`.
     pub fn try_new_with_params(
         game: G,
         seed: Seed,
         observer: Observer,
         params: G::Params,
     ) -> Result<Self, EnvError> {
-        Self::validate_params(&game, &params)?;
         let agent_player = match observer {
             Observer::Player(player) => player,
             Observer::Spectator => 0,
         };
-        Ok(Self {
-            session: SessionKernel::new_with_params(game, seed, params),
-            observer,
-            agent_player,
-        })
+        Self::try_new_with_agent_params(game, seed, agent_player, params)
     }
 
-    /// Creates a new compact environment initialized with explicit params.
+    /// Creates a new compact environment from an observer selector.
+    ///
+    /// Compatibility wrapper: `Observer::Spectator` selects agent player `0`.
     pub fn new_with_params(game: G, seed: Seed, observer: Observer, params: G::Params) -> Self {
         Self::try_new_with_params(game, seed, observer, params)
             .expect("invalid parameter bundle for compact environment")
     }
 
-    /// Creates a new compact environment.
+    /// Creates a new compact environment for a designated agent player.
+    pub fn new_for_agent(game: G, seed: Seed, agent_player: PlayerId) -> Self {
+        let params = game.default_params();
+        Self::new_with_agent_params(game, seed, agent_player, params)
+    }
+
+    /// Creates a new compact environment from an observer selector.
+    ///
+    /// Compatibility wrapper: `Observer::Spectator` selects agent player `0`.
     pub fn new(game: G, seed: Seed, observer: Observer) -> Self {
         let params = game.default_params();
         Self::new_with_params(game, seed, observer, params)
     }
 
-    /// Returns immutable access to the underlying session kernel.
-    pub fn session(&self) -> &SessionKernel<G, H> {
+    /// Test-only immutable access to the underlying session kernel.
+    ///
+    /// Per specification §8 the AIXI-native `Environment` is a black-box
+    /// boundary: the caller must not be able to inspect hidden runtime
+    /// state, RNG internals, or replay/history handles beyond the
+    /// explicit setup inputs and the emitted percept history. This
+    /// accessor is therefore gated behind `#[cfg(test)]` so it is only
+    /// reachable by reference regression tests that exercise the
+    /// non-public kernel projection; it is not part of any public or
+    /// crate-internal production code path.
+    #[cfg(test)]
+    pub(crate) fn session(&self) -> &SessionKernel<G, H> {
         &self.session
     }
 
-    /// Returns mutable access to the underlying session kernel.
-    pub fn session_mut(&mut self) -> &mut SessionKernel<G, H> {
-        &mut self.session
-    }
-
-    /// Returns current observer viewpoint.
-    pub fn observer(&self) -> Observer {
-        self.observer
-    }
-
-    /// Sets observer viewpoint used for future observation encodes.
-    pub fn set_observer(&mut self, observer: Observer) {
-        self.observer = observer;
-        if let Observer::Player(player) = observer {
-            self.agent_player = player;
-        }
-    }
-
-    /// Returns the player id controlled by compact `step()` actions.
+    /// Returns the designated acting player.
+    ///
+    /// Per specification §8 this is the sole additional public accessor
+    /// on the concrete AIXI-native `Environment` beyond the
+    /// reset/step methods declared by `AixiEnvironment`.
     pub fn agent_player(&self) -> PlayerId {
         self.agent_player
     }
 
-    fn validate_player(&self, player: PlayerId) -> Result<(), EnvError> {
-        let player_count = self.session.game().player_count();
-        if player >= player_count {
-            return Err(EnvError::InvalidAgentPlayer {
-                player,
-                player_count,
-            });
-        }
-        Ok(())
+    fn encoded_zero_reward(&self) -> Result<CompactReward, EnvError> {
+        let spec = self.session.compact_spec();
+        let reward = 0i64;
+        let encoded = spec
+            .try_encode_reward(reward)
+            .map_err(|reason| match reason {
+                CompactError::RewardOutOfRange { .. } => EnvError::RewardOutOfRange {
+                    reward,
+                    min: spec.min_reward,
+                    max: spec.max_reward,
+                },
+                other => EnvError::InvalidRewardEncoding { reason: other },
+            })?;
+        Ok(CompactReward {
+            raw: reward,
+            encoded,
+        })
     }
 
-    fn validate_observer(&self) -> Result<(), EnvError> {
-        if let Observer::Player(player) = self.observer {
-            self.validate_player(player)?;
-        }
-        Ok(())
-    }
-
-    /// Sets the player id controlled by compact `step()` actions.
-    pub fn set_agent_player(&mut self, player: PlayerId) {
-        self.agent_player = player;
-    }
-
-    /// Resets session state and returns initial compact observation.
-    pub fn reset(&mut self, seed: Seed) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+    /// Resets session state and returns the initial percept token.
+    pub fn reset(&mut self, seed: Seed) -> Result<Percept<MAX_WORDS>, EnvError> {
         self.session.reset(seed);
-        self.encode_current_observation()
+        Ok(Percept {
+            observation_bits: self.encode_current_observation()?,
+            reward: self.encoded_zero_reward()?,
+            terminated: self.session.is_terminal(),
+        })
     }
 
-    /// Resets state from explicit params and returns initial compact observation.
+    /// Resets state from explicit params and returns the initial percept token.
     pub fn reset_with_params(
         &mut self,
         seed: Seed,
         params: G::Params,
-    ) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+    ) -> Result<Percept<MAX_WORDS>, EnvError> {
         Self::validate_params(self.session.game(), &params)?;
         self.session.reset_with_params(seed, params);
-        self.encode_current_observation()
+        Ok(Percept {
+            observation_bits: self.encode_current_observation()?,
+            reward: self.encoded_zero_reward()?,
+            terminated: self.session.is_terminal(),
+        })
     }
 
-    /// Steps the environment from an encoded action value.
-    pub fn step(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError> {
+    /// Steps the environment from a checked action token.
+    pub fn step(&mut self, action: ActionToken) -> Result<Percept<MAX_WORDS>, EnvError> {
         if self.session.is_terminal() {
             return Err(EnvError::SessionTerminated);
         }
 
-        let Some(action) = self.session.game().decode_action(action_bits) else {
-            return Err(EnvError::InvalidActionEncoding {
-                encoded: action_bits,
-            });
-        };
-
-        self.validate_player(self.agent_player)?;
+        let encoded = action.encoded();
+        let action = self.session.game().decode_action(encoded).unwrap_or_else(|| {
+            panic!(
+                "AIXI front-door validity violated: in-alphabet token `{encoded}` failed to decode"
+            )
+        });
 
         let mut actions = G::JointActionBuf::default();
         actions
@@ -332,25 +417,36 @@ where
                 other => EnvError::InvalidRewardEncoding { reason: other },
             })?;
 
-        Ok(EnvStep {
+        Ok(Percept {
             observation_bits: self.encode_current_observation()?,
             reward: CompactReward {
                 raw: reward,
                 encoded: encoded_reward,
             },
             terminated,
-            truncated: false,
         })
     }
 
-    /// Encodes current observation into a bounded compact packet.
-    pub fn encode_current_observation(&self) -> Result<BitPacket<MAX_WORDS>, EnvError> {
-        self.validate_observer()?;
+    /// Compatibility helper that accepts raw compact action words.
+    pub fn step_bits(&mut self, action_bits: u64) -> Result<Percept<MAX_WORDS>, EnvError> {
+        let token = ActionToken::from_spec(&self.session.compact_spec(), action_bits)
+            .expect("encoded action is outside the external action alphabet");
+        self.step(token)
+    }
 
+    /// Encodes current observation into a bounded compact packet.
+    ///
+    /// This helper is internal to the reset/step percept-emission path
+    /// and is not part of the black-box public `Environment` surface per
+    /// specification §8. It is exposed to crate-internal regression
+    /// tests that exercise the compact-spec contract.
+    pub(crate) fn encode_current_observation(&self) -> Result<BitPacket<MAX_WORDS>, EnvError> {
         let mut encoded = G::WordBuf::default();
-        self.session
-            .game()
-            .observe_and_encode(self.session.state(), self.observer, &mut encoded);
+        self.session.game().encode_player_view(
+            self.session.state(),
+            self.agent_player,
+            &mut encoded,
+        );
         if encoded.len() > MAX_WORDS {
             return Err(EnvError::ObservationOverflow {
                 actual_words: encoded.len(),
@@ -370,41 +466,41 @@ where
     }
 }
 
-impl<G, H, const MAX_WORDS: usize> InfotheoryEnvironment<MAX_WORDS> for Environment<G, H, MAX_WORDS>
+impl<G, H, const MAX_WORDS: usize> AixiEnvironment<MAX_WORDS> for Environment<G, H, MAX_WORDS>
 where
-    G: Observe,
+    G: Game,
     H: HistoryStore<G>,
 {
     type Params = G::Params;
 
-    /// Resets environment and emits initial packet.
-    fn reset_seed(&mut self, seed: Seed) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+    /// Resets environment and emits initial percept token.
+    fn reset_seed(&mut self, seed: Seed) -> Result<Percept<MAX_WORDS>, EnvError> {
         self.reset(seed)
     }
 
-    /// Resets environment from explicit params and emits initial packet.
+    /// Resets environment from explicit params and emits initial percept token.
     fn reset_seed_with_params(
         &mut self,
         seed: Seed,
         params: Self::Params,
-    ) -> Result<BitPacket<MAX_WORDS>, EnvError> {
+    ) -> Result<Percept<MAX_WORDS>, EnvError> {
         self.reset_with_params(seed, params)
     }
 
-    /// Steps environment with compact action bits.
-    fn step_bits(&mut self, action_bits: u64) -> Result<EnvStep<MAX_WORDS>, EnvError> {
-        self.step(action_bits)
+    /// Steps environment using a checked action token.
+    fn step(&mut self, action: ActionToken) -> Result<Percept<MAX_WORDS>, EnvError> {
+        Environment::step(self, action)
     }
 }
 
 #[cfg(test)]
 mod regression_tests {
-    use super::{DefaultEnvironment, EnvError, Observer};
+    use super::{ActionToken, ActionTokenError, DefaultEnvironment, EnvError, Observer};
     use crate::buffer::FixedVec;
     use crate::compact::CompactSpec;
-    use crate::game::Game;
+    use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct DemoGame;
@@ -433,12 +529,11 @@ mod regression_tests {
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct RejectingParamsGame;
 
-    impl Game for DemoGame {
+    impl GameAuthoring for DemoGame {
         type Params = u8;
         type State = DemoState;
         type Action = DemoAction;
         type Obs = u8;
-        type WorldView = u8;
         type PlayerBuf = FixedVec<PlayerId, 2>;
         type ActionBuf = FixedVec<DemoAction, 1>;
         type JointActionBuf = FixedVec<PlayerAction<DemoAction>, 2>;
@@ -491,16 +586,12 @@ mod regression_tests {
             99
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {
-            0
-        }
-
         fn step_in_place(
             &self,
             state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -518,7 +609,7 @@ mod regression_tests {
             out.termination = Termination::Terminal { winner: Some(0) };
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: 1,
                 observation_bits: 64,
@@ -551,12 +642,11 @@ mod regression_tests {
         }
     }
 
-    impl Game for BadObservationGame {
+    impl GameAuthoring for BadObservationGame {
         type Params = ();
         type State = ();
         type Action = u8;
         type Obs = u8;
-        type WorldView = ();
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -600,14 +690,13 @@ mod regression_tests {
             8
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
 
         fn step_in_place(
             &self,
             _state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -617,7 +706,7 @@ mod regression_tests {
                 .unwrap();
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: 1,
                 observation_bits: 3,
@@ -647,12 +736,11 @@ mod regression_tests {
         }
     }
 
-    impl Game for BadRewardGame {
+    impl GameAuthoring for BadRewardGame {
         type Params = ();
         type State = bool;
         type Action = u8;
         type Obs = u8;
-        type WorldView = ();
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -697,14 +785,13 @@ mod regression_tests {
             0
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
 
         fn step_in_place(
             &self,
             state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -716,7 +803,7 @@ mod regression_tests {
             out.termination = Termination::Terminal { winner: Some(0) };
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: 1,
                 observation_bits: 1,
@@ -746,12 +833,11 @@ mod regression_tests {
         }
     }
 
-    impl Game for ParamRewardGame {
+    impl GameAuthoring for ParamRewardGame {
         type Params = u8;
         type State = u8;
         type Action = u8;
         type Obs = u8;
-        type WorldView = ();
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -801,14 +887,13 @@ mod regression_tests {
             *state
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
 
         fn step_in_place(
             &self,
             state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -818,19 +903,7 @@ mod regression_tests {
                 .unwrap();
         }
 
-        fn compact_spec(&self) -> CompactSpec {
-            CompactSpec {
-                action_count: 1,
-                observation_bits: 8,
-                observation_stream_len: 1,
-                reward_bits: 1,
-                min_reward: 0,
-                max_reward: 0,
-                reward_offset: 0,
-            }
-        }
-
-        fn compact_spec_for_params(&self, params: &Self::Params) -> CompactSpec {
+        fn compact_spec_for(&self, params: &Self::Params) -> CompactSpec {
             let max_reward = i64::from(*params);
             let reward_bits = if max_reward == 0 {
                 1
@@ -866,12 +939,11 @@ mod regression_tests {
         }
     }
 
-    impl Game for RejectingParamsGame {
+    impl GameAuthoring for RejectingParamsGame {
         type Params = i32;
         type State = i32;
         type Action = u8;
         type Obs = i32;
-        type WorldView = ();
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -926,14 +998,13 @@ mod regression_tests {
             *state
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
 
         fn step_in_place(
             &self,
             _state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -943,7 +1014,7 @@ mod regression_tests {
                 .unwrap();
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: 1,
                 observation_bits: 8,
@@ -975,25 +1046,43 @@ mod regression_tests {
 
     #[test]
     fn step_uses_agent_player_reward() {
-        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
-        env.set_agent_player(1);
-        let step = env.step(0).unwrap();
+        let mut env = DefaultEnvironment::<DemoGame, 2>::new_for_agent(DemoGame, 3, 1);
+        let step = env.step_bits(0).unwrap();
         assert_eq!(step.reward.raw, 20);
         assert_eq!(step.reward.encoded, 20);
     }
 
     #[test]
+    fn reset_emits_initial_percept_with_zero_reward() {
+        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
+        let initial = env.reset(3).unwrap();
+        assert_eq!(initial.reward.raw, 0);
+        assert_eq!(initial.reward.encoded, 0);
+        assert!(!initial.terminated);
+    }
+
+    #[test]
+    fn out_of_alphabet_action_bits_are_rejected_by_token_gate() {
+        let env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
+        let spec = env.session().compact_spec();
+        assert!(matches!(
+            ActionToken::from_spec(&spec, 1),
+            Err(ActionTokenError::OutOfAlphabet { .. })
+        ));
+    }
+
+    #[test]
     fn stepping_terminal_session_returns_error() {
         let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
-        env.step(0).unwrap();
-        assert_eq!(env.step(0), Err(EnvError::SessionTerminated));
+        env.step_bits(0).unwrap();
+        assert_eq!(env.step_bits(0), Err(EnvError::SessionTerminated));
     }
 
     #[test]
     fn spectator_observations_use_spectator_encoder() {
         let env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Spectator);
         let packet = env.encode_current_observation().unwrap();
-        assert_eq!(packet.words(), &[299]);
+        assert_eq!(packet.words(), &[100]);
     }
 
     #[test]
@@ -1023,22 +1112,17 @@ mod regression_tests {
         let mut env =
             DefaultEnvironment::<BadRewardGame, 1>::new(BadRewardGame, 1, Observer::Player(0));
         assert!(matches!(
-            env.step(0),
+            env.step_bits(0),
             Err(EnvError::InvalidRewardEncoding { .. })
         ));
     }
 
     #[test]
     fn observation_rejects_out_of_range_player_observer() {
-        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
-        env.set_observer(Observer::Player(7));
-        assert_eq!(
-            env.encode_current_observation(),
-            Err(EnvError::InvalidAgentPlayer {
-                player: 7,
-                player_count: 2,
-            })
-        );
+        assert!(matches!(
+            DefaultEnvironment::<DemoGame, 2>::try_new_with_agent_params(DemoGame, 3, 7, 0),
+            Err(EnvError::InvalidParameters { game: "demo" })
+        ));
     }
 
     #[test]
@@ -1046,7 +1130,7 @@ mod regression_tests {
         let mut env =
             DefaultEnvironment::<ParamRewardGame, 1>::new(ParamRewardGame, 1, Observer::Player(0));
         env.reset_with_params(1, 5).unwrap();
-        let step = env.step(0).unwrap();
+        let step = env.step_bits(0).unwrap();
         assert_eq!(step.reward.raw, 5);
         assert_eq!(step.reward.encoded, 5);
     }
@@ -1087,9 +1171,9 @@ mod proofs {
     use super::{DefaultEnvironment, EnvError, Observer};
     use crate::buffer::FixedVec;
     use crate::compact::CompactSpec;
-    use crate::game::Game;
+    use crate::game::GameAuthoring;
     use crate::rng::DeterministicRng;
-    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, StepOutcome, Termination};
+    use crate::types::{PlayerAction, PlayerId, PlayerReward, Seed, KernelOutcome, Termination};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct ObservationViolationGame;
@@ -1097,12 +1181,11 @@ mod proofs {
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct RewardBitsViolationGame;
 
-    impl Game for ObservationViolationGame {
+    impl GameAuthoring for ObservationViolationGame {
         type Params = ();
         type State = ();
         type Action = u8;
         type Obs = u8;
-        type WorldView = ();
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -1146,14 +1229,13 @@ mod proofs {
             8
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
 
         fn step_in_place(
             &self,
             _state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -1163,7 +1245,7 @@ mod proofs {
                 .unwrap();
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: 1,
                 observation_bits: 3,
@@ -1193,12 +1275,11 @@ mod proofs {
         }
     }
 
-    impl Game for RewardBitsViolationGame {
+    impl GameAuthoring for RewardBitsViolationGame {
         type Params = ();
         type State = bool;
         type Action = u8;
         type Obs = u8;
-        type WorldView = ();
         type PlayerBuf = FixedVec<PlayerId, 1>;
         type ActionBuf = FixedVec<u8, 1>;
         type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
@@ -1243,14 +1324,13 @@ mod proofs {
             0
         }
 
-        fn world_view(&self, _state: &Self::State) -> Self::WorldView {}
 
         fn step_in_place(
             &self,
             state: &mut Self::State,
             _joint_actions: &Self::JointActionBuf,
             _rng: &mut DeterministicRng,
-            out: &mut StepOutcome<Self::RewardBuf>,
+            out: &mut KernelOutcome<Self::RewardBuf>,
         ) {
             out.rewards
                 .push(PlayerReward {
@@ -1262,7 +1342,7 @@ mod proofs {
             out.termination = Termination::Terminal { winner: Some(0) };
         }
 
-        fn compact_spec(&self) -> CompactSpec {
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
             CompactSpec {
                 action_count: 1,
                 observation_bits: 1,
@@ -1313,7 +1393,7 @@ mod proofs {
             Observer::Player(0),
         );
         assert!(matches!(
-            env.step(0),
+            env.step_bits(0),
             Err(EnvError::InvalidRewardEncoding { .. })
         ));
     }
@@ -1323,7 +1403,7 @@ mod proofs {
 mod tests {
     use super::{DefaultEnvironment, Observer};
     use crate::builtin::{TicTacToe, TicTacToeAction};
-    use crate::game::Game;
+    use crate::game::GameAuthoring;
 
     #[test]
     fn env_wrapper_emits_compact_observations() {
@@ -1332,7 +1412,7 @@ mod tests {
         assert_eq!(initial.words(), &[0]);
 
         let action = TicTacToe.encode_action(&TicTacToeAction(0));
-        let step = env.step(action).unwrap();
+        let step = env.step_bits(action).unwrap();
         assert_eq!(step.observation_bits.words().len(), 1);
     }
 }

@@ -1,6 +1,6 @@
 use super::{Blackjack, BlackjackAction, BlackjackPhase, HandValue, MAX_HAND_CARDS};
 use crate::buffer::FixedVec;
-use crate::game::Game;
+use crate::game::GameAuthoring;
 use crate::types::PlayerAction;
 
 #[kani::proof]

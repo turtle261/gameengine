@@ -1,6 +1,6 @@
 use gameengine::core::single_player::{self, SinglePlayerGame, SinglePlayerRewardBuf};
 use gameengine::{
-    Buffer, DeterministicRng, FixedVec, PlayerId, Seed, Session, StepOutcome, Termination,
+    Buffer, DeterministicRng, FixedVec, PlayerId, Seed, Session, KernelOutcome, Termination,
 };
 
 const W: i16 = 40;
@@ -55,7 +55,6 @@ impl SinglePlayerGame for Pong {
     type State = St;
     type Action = Act;
     type Obs = St;
-    type WorldView = St;
     type ActionBuf = FixedVec<Act, 3>;
     type WordBuf = FixedVec<u64, 1>;
 
@@ -83,15 +82,12 @@ impl SinglePlayerGame for Pong {
     fn observe_player(&self, st: &St) -> St {
         *st
     }
-    fn world_view(&self, st: &St) -> St {
-        *st
-    }
     fn step_in_place(
         &self,
         st: &mut St,
         action: Option<Act>,
         _rng: &mut DeterministicRng,
-        out: &mut StepOutcome<SinglePlayerRewardBuf>,
+        out: &mut KernelOutcome<SinglePlayerRewardBuf>,
     ) {
         if st.done {
             out.termination = Termination::Terminal { winner: st.winner };
