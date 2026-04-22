@@ -834,6 +834,7 @@ where \code{reward} is a \code{CompactReward}. Mathematically this record is one
   \item \code{InvalidObservationEncoding\{reason\}}
   \item \code{RewardOutOfRange\{reward,min,max\}}
   \item \code{InvalidRewardEncoding\{reason\}}
+  \item \code{InvalidActionToken\{reason\}}
   \item \code{InvalidParameters\{game\}}
 \end{itemize}
 
@@ -861,7 +862,7 @@ The exact environment step law on checked action token $a$ is:
   \item return the percept token consisting of the observation packet, the raw and encoded reward, and the step terminality.
 \end{enumerate}
 
-The compatibility helper \code{step\_bits(encoded)} first constructs an \code{ActionToken} and then delegates to \code{step(action)}.
+The compatibility helper \code{step\_bits(encoded)} first constructs an \code{ActionToken}. If token construction fails, it returns \code{InvalidActionToken\{reason\}} with that \code{ActionTokenError}; otherwise it delegates to \code{step(action)}.
 
 Only realizations in which one designated player action per environment cycle is sufficient, and in which hidden state and randomness remain encapsulated behind the action-percept interface, may be exposed through this adapter. If an underlying kernel requires additional externally supplied simultaneous actions, or if the adapter leaks hidden realization data beyond the black-box contract above, it is not itself an \code{AixiEnvironment} until those issues are internalized or removed from the environment law.
 

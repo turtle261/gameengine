@@ -278,15 +278,13 @@ impl Presenter<Blackjack> for BlackjackPresenter {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } => {
-                if view.player_observation().phase == BlackjackPhase::PlayerTurn
-                    && !view.is_terminal()
-                {
-                    if Self::hit_button(metrics).contains(self.cursor) {
-                        self.submit(actions, BlackjackAction::Hit);
-                    } else if Self::stand_button(metrics).contains(self.cursor) {
-                        self.submit(actions, BlackjackAction::Stand);
-                    }
+            } if view.player_observation().phase == BlackjackPhase::PlayerTurn
+                && !view.is_terminal() =>
+            {
+                if Self::hit_button(metrics).contains(self.cursor) {
+                    self.submit(actions, BlackjackAction::Hit);
+                } else if Self::stand_button(metrics).contains(self.cursor) {
+                    self.submit(actions, BlackjackAction::Stand);
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {

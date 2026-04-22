@@ -142,6 +142,11 @@ pub enum EnvError {
         /// Canonical compact constraint violation details.
         reason: CompactError,
     },
+    /// Raw action bits are outside the compact action alphabet.
+    InvalidActionToken {
+        /// Checked token construction failure details.
+        reason: ActionTokenError,
+    },
     /// Parameter bundle was rejected by the game's parameter invariant.
     InvalidParameters {
         /// Stable machine-readable game name.
@@ -173,6 +178,9 @@ impl fmt::Display for EnvError {
             }
             Self::InvalidRewardEncoding { reason } => {
                 write!(f, "reward does not satisfy compact schema: {reason}")
+            }
+            Self::InvalidActionToken { reason } => {
+                write!(f, "invalid action token: {reason}")
             }
             Self::InvalidParameters { game } => {
                 write!(f, "invalid parameter bundle for game `{game}`")
@@ -430,7 +438,7 @@ where
     /// Compatibility helper that accepts raw compact action words.
     pub fn step_bits(&mut self, action_bits: u64) -> Result<Percept<MAX_WORDS>, EnvError> {
         let token = ActionToken::from_spec(&self.session.compact_spec(), action_bits)
-            .expect("encoded action is outside the external action alphabet");
+            .map_err(|reason| EnvError::InvalidActionToken { reason })?;
         self.step(token)
     }
 
@@ -1059,11 +1067,20 @@ mod regression_tests {
 
     #[test]
     fn out_of_alphabet_action_bits_are_rejected_by_token_gate() {
-        let env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
+        let mut env = DefaultEnvironment::<DemoGame, 2>::new(DemoGame, 3, Observer::Player(0));
         let spec = env.session().compact_spec();
         assert!(matches!(
             ActionToken::from_spec(&spec, 1),
             Err(ActionTokenError::OutOfAlphabet { .. })
+        ));
+        assert!(matches!(
+            env.step_bits(1),
+            Err(EnvError::InvalidActionToken {
+                reason: ActionTokenError::OutOfAlphabet {
+                    encoded: 1,
+                    action_count: 1
+                }
+            })
         ));
     }
 

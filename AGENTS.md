@@ -92,7 +92,7 @@ This section MUST be followed strictly.
 
 ### Summary
 
-GameEngine MUST be held to the strictest of scientific and mathematical standards, and aligned with truth in general. We must abide to specification where applicable, and fix shortfalls to the standards laid out here, not work around, hide, or mask them. We must actively use the utmost high quality software design principles.
+GameEngine MUST be held to the strictest of scientific and mathematical standards, and aligned with truth in general. We must abide to specification where applicable, and fix shortfalls to the standards laid out here, not work around, hide, or mask them. We must actively use the utmost high quality software design principles. It is an overall goal that, in line with the current Crate version, should must strictly match the .tex spec in spec/ -- i.e. for version 0.3.1 in line with spec/zerodotthreedotone.tex .
 GameEngine aims for the utmost performance and memory efficiency, and it is actively an aim for the implementations which exist to themselves be done in the most performant and memory efficient manner, maximally so.
 
 
