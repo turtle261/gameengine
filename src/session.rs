@@ -274,13 +274,23 @@ where
     type Trace = ReplayTrace<G::JointActionBuf, G::RewardBuf, LOG>;
 
     fn from_seed(seed: Seed, initial_state: &G::State, initial_rng: DeterministicRng) -> Self {
+        let mut snapshots: [HistorySnapshot<G::State>; SNAPSHOTS] = default_array();
+        let mut snapshot_count = 0usize;
+        if SNAPSHOTS > 0 {
+            snapshots[0] = HistorySnapshot {
+                tick: 0,
+                state: initial_state.clone(),
+                rng: initial_rng,
+            };
+            snapshot_count = 1;
+        }
         Self {
             seed,
             initial_state: initial_state.clone(),
             initial_rng,
             trace: ReplayTrace::new(seed),
-            snapshots: default_array(),
-            snapshot_count: 0,
+            snapshots,
+            snapshot_count,
         }
     }
 
@@ -290,7 +300,16 @@ where
         self.initial_rng = initial_rng;
         self.trace.clear(seed);
         self.snapshots = default_array();
-        self.snapshot_count = 0;
+        if SNAPSHOTS > 0 {
+            self.snapshots[0] = HistorySnapshot {
+                tick: 0,
+                state: initial_state.clone(),
+                rng: initial_rng,
+            };
+            self.snapshot_count = 1;
+        } else {
+            self.snapshot_count = 0;
+        }
     }
 
     fn record(
@@ -770,7 +789,7 @@ mod tests {
     use crate::rng::DeterministicRng;
     use crate::types::{KernelOutcome, PlayerAction, PlayerId, PlayerReward, Seed, Termination};
 
-    use super::{DynamicHistory, SessionKernel};
+    use super::{DynamicHistory, FixedHistory, HistoryStore, SessionKernel};
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct SpinnerGame;
@@ -866,6 +885,29 @@ mod tests {
         assert_eq!(session.state_at(512), Some(SpinnerState { tick: 512 }));
         assert!(session.rewind_to(384));
         assert_eq!(session.state(), &SpinnerState { tick: 384 });
+    }
+
+    #[test]
+    fn fixed_history_inserts_initial_snapshot_on_construction_and_reset() {
+        type History = FixedHistory<SpinnerGame, 8, 2, 1>;
+        let initial_state = SpinnerState { tick: 0 };
+        let initial_rng = DeterministicRng::from_seed_and_stream(7, 1);
+
+        let mut history =
+            <History as HistoryStore<SpinnerGame>>::from_seed(7, &initial_state, initial_rng);
+        assert_eq!(history.snapshot_count, 1);
+        assert_eq!(history.snapshots[0].tick, 0);
+        assert_eq!(history.snapshots[0].state, initial_state);
+        assert_eq!(history.snapshots[0].rng, initial_rng);
+
+        let reset_state = SpinnerState { tick: 9 };
+        let reset_rng = DeterministicRng::from_seed_and_stream(11, 1);
+        <History as HistoryStore<SpinnerGame>>::reset(&mut history, 11, &reset_state, reset_rng);
+
+        assert_eq!(history.snapshot_count, 1);
+        assert_eq!(history.snapshots[0].tick, 0);
+        assert_eq!(history.snapshots[0].state, reset_state);
+        assert_eq!(history.snapshots[0].rng, reset_rng);
     }
 }
 

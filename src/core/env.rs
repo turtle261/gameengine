@@ -249,7 +249,6 @@ where
     fn validate_player(game: &G, player: PlayerId) -> Result<(), EnvError> {
         let player_count = game.player_count();
         if player >= player_count {
-            let _ = player_count;
             return Err(EnvError::InvalidParameters { game: game.name() });
         }
         Ok(())
