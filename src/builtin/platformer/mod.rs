@@ -304,7 +304,7 @@ impl Platformer {
         let was_non_terminal = state.remaining_berries != 0;
         let mut remaining = u64::from(state.remaining_berries);
         let collected = collect_actor_trigger_contacts(
-            &mut state.world,
+            &state.world,
             PLAYER_BODY_ID,
             FIRST_BERRY_BODY_ID,
             BERRY_COUNT,

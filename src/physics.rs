@@ -136,6 +136,12 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
             if contact.a >= contact.b {
                 return false;
             }
+            if contact_index > 0 {
+                let previous = contacts[contact_index - 1];
+                if (previous.a, previous.b) >= (contact.a, contact.b) {
+                    return false;
+                }
+            }
             contact_index += 1;
         }
         true
@@ -158,21 +164,21 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
         self.bodies
             .push(body)
             .expect("physics body capacity exceeded");
-        self.clamp_body(body.id);
+        let last_index = self.bodies.len() - 1;
+        self.clamp_body_index(last_index);
+    }
+
+    fn body_index(&self, id: u16) -> Option<usize> {
+        self.bodies
+            .as_slice()
+            .binary_search_by_key(&id, |body| body.id)
+            .ok()
     }
 
     /// Returns immutable body by id.
     pub fn body(&self, id: u16) -> Option<&PhysicsBody2d> {
-        let bodies = self.bodies.as_slice();
-        let mut index = 0usize;
-        while index < bodies.len() {
-            let body = &bodies[index];
-            if body.id == id {
-                return Some(body);
-            }
-            index += 1;
-        }
-        None
+        self.body_index(id)
+            .map(|index| &self.bodies.as_slice()[index])
     }
 
     /// Returns immutable body by id or panics if missing.
@@ -182,15 +188,8 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
 
     /// Returns mutable body by id.
     pub fn body_mut(&mut self, id: u16) -> Option<&mut PhysicsBody2d> {
-        let bodies = self.bodies.as_mut_slice();
-        let mut index = 0usize;
-        while index < bodies.len() {
-            if bodies[index].id == id {
-                return Some(&mut bodies[index]);
-            }
-            index += 1;
-        }
-        None
+        let index = self.body_index(id)?;
+        Some(&mut self.bodies.as_mut_slice()[index])
     }
 
     /// Sets activity flag and refreshes contact cache.
@@ -212,10 +211,10 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
     }
 
     pub(crate) fn set_body_position_deferred(&mut self, id: u16, position: Vec2<StrictF64>) {
-        if let Some(body) = self.body_mut(id) {
-            body.position = position;
+        if let Some(index) = self.body_index(id) {
+            self.bodies.as_mut_slice()[index].position = position;
+            self.clamp_body_index(index);
         }
-        self.clamp_body(id);
     }
 
     /// Translates body and refreshes contact cache.
@@ -225,10 +224,10 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
     }
 
     pub(crate) fn translate_body_deferred(&mut self, id: u16, delta: Vec2<StrictF64>) {
-        if let Some(body) = self.body_mut(id) {
-            body.position += delta;
+        if let Some(index) = self.body_index(id) {
+            self.bodies.as_mut_slice()[index].position += delta;
+            self.clamp_body_index(index);
         }
-        self.clamp_body(id);
     }
 
     /// Advances world tick and recomputes contacts.
@@ -240,28 +239,21 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
     /// Returns whether bodies `a` and `b` currently overlap.
     pub fn has_contact(&self, a: u16, b: u16) -> bool {
         let (left, right) = if a <= b { (a, b) } else { (b, a) };
-        let contacts = self.contacts.as_slice();
-        let mut index = 0usize;
-        while index < contacts.len() {
-            let contact = contacts[index];
-            if contact.a == left && contact.b == right {
-                return true;
-            }
-            index += 1;
-        }
-        false
+        self.contacts
+            .as_slice()
+            .binary_search_by_key(&(left, right), |contact| (contact.a, contact.b))
+            .is_ok()
     }
 
-    fn clamp_body(&mut self, id: u16) {
+    fn clamp_body_index(&mut self, index: usize) {
         let bounds = self.bounds;
-        if let Some(body) = self.body_mut(id) {
-            let min_x = bounds.min.x + body.half_extents.x;
-            let max_x = bounds.max.x - body.half_extents.x;
-            let min_y = bounds.min.y + body.half_extents.y;
-            let max_y = bounds.max.y - body.half_extents.y;
-            body.position.x = body.position.x.clamp(min_x, max_x);
-            body.position.y = body.position.y.clamp(min_y, max_y);
-        }
+        let body = &mut self.bodies.as_mut_slice()[index];
+        let min_x = bounds.min.x + body.half_extents.x;
+        let max_x = bounds.max.x - body.half_extents.x;
+        let min_y = bounds.min.y + body.half_extents.y;
+        let max_y = bounds.max.y - body.half_extents.y;
+        body.position.x = body.position.x.clamp(min_x, max_x);
+        body.position.y = body.position.y.clamp(min_y, max_y);
     }
 
     pub(crate) fn refresh_contacts(&mut self) {
@@ -301,6 +293,9 @@ impl<const BODIES: usize, const CONTACTS: usize> PhysicsWorld2d<BODIES, CONTACTS
                 }
                 left += 1;
             }
+            self.contacts
+                .as_mut_slice()
+                .sort_by_key(|contact| (contact.a, contact.b));
             return;
         }
 
@@ -420,7 +415,7 @@ pub fn set_trigger_mask_deferred<const BODIES: usize, const CONTACTS: usize>(
 /// triggers. Caller code is responsible for applying any deferred trigger-body
 /// activity synchronization after collection.
 pub fn collect_actor_trigger_contacts<const BODIES: usize, const CONTACTS: usize>(
-    world: &mut PhysicsWorld2d<BODIES, CONTACTS>,
+    world: &PhysicsWorld2d<BODIES, CONTACTS>,
     actor_id: u16,
     first_trigger_id: u16,
     trigger_count: usize,
@@ -430,18 +425,34 @@ pub fn collect_actor_trigger_contacts<const BODIES: usize, const CONTACTS: usize
         trigger_count <= u64::BITS as usize,
         "trigger_count {trigger_count} exceeds 64-bit trigger mask capacity"
     );
-    let mut collected = 0u8;
-    let mut index = 0usize;
-    while index < trigger_count {
-        let bit = 1u64 << index;
-        let trigger_id = first_trigger_id + index as u16;
-        if (*remaining_mask & bit) != 0 && world.has_contact(actor_id, trigger_id) {
-            *remaining_mask &= !bit;
-            collected += 1;
-        }
-        index += 1;
+    if *remaining_mask == 0 || trigger_count == 0 {
+        return 0;
     }
-    collected
+
+    let first_trigger_id: u32 = u32::from(first_trigger_id);
+    let trigger_count_u32: u32 =
+        u32::try_from(trigger_count).expect("trigger_count bounded to 64 fits in u32");
+    let last_trigger_id_exclusive = first_trigger_id + trigger_count_u32;
+
+    let mut contacted_mask = 0u64;
+    for contact in world.contacts.as_slice() {
+        let other_id = if contact.a == actor_id {
+            u32::from(contact.b)
+        } else if contact.b == actor_id {
+            u32::from(contact.a)
+        } else {
+            continue;
+        };
+        if other_id < first_trigger_id || other_id >= last_trigger_id_exclusive {
+            continue;
+        }
+        let bit_index = other_id - first_trigger_id;
+        contacted_mask |= 1u64 << bit_index;
+    }
+
+    let collected_mask = *remaining_mask & contacted_mask;
+    *remaining_mask &= !collected_mask;
+    collected_mask.count_ones() as u8
 }
 
 fn intersects(left: Aabb2<StrictF64>, right: Aabb2<StrictF64>) -> bool {
@@ -505,7 +516,10 @@ mod proofs {
 
 #[cfg(test)]
 mod tests {
-    use super::{BodyKind, Contact2d, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d};
+    use super::{
+        BodyKind, Contact2d, PhysicsBody2d, PhysicsOracleView2d, PhysicsWorld2d,
+        collect_actor_trigger_contacts,
+    };
     use crate::math::{Aabb2, StrictF64, Vec2};
 
     fn sample_body(id: u16, x: f64, y: f64) -> PhysicsBody2d {
@@ -531,6 +545,9 @@ mod tests {
         world.add_body(sample_body(4, 4.4, 4.0));
         world.set_body_active(4, false);
         assert_eq!(world.contacts.as_slice(), &[Contact2d { a: 1, b: 2 }]);
+        assert!(world.has_contact(1, 2));
+        assert!(world.has_contact(2, 1));
+        assert!(!world.has_contact(1, 4));
     }
 
     #[test]
@@ -551,5 +568,49 @@ mod tests {
             PhysicsOracleView2d::contacts(&world),
             &[Contact2d { a: 1, b: 2 }]
         );
+    }
+
+    #[test]
+    fn collect_actor_trigger_contacts_only_collects_trigger_range_contacts() {
+        let bounds = Aabb2::new(
+            Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
+            Vec2::new(StrictF64::new(16.0), StrictF64::new(16.0)),
+        );
+        let mut world = PhysicsWorld2d::<5, 10>::new(bounds);
+        world.add_body(sample_body(1, 1.0, 1.0));
+        world.add_body(sample_body(5, 1.0, 1.0));
+        world.add_body(sample_body(10, 1.0, 1.0));
+        world.add_body(sample_body(11, 4.0, 4.0));
+        world.add_body(sample_body(12, 1.0, 1.0));
+
+        let mut remaining_mask = 0b111u64;
+        let collected = collect_actor_trigger_contacts(&world, 1, 10, 3, &mut remaining_mask);
+        assert_eq!(collected, 2);
+        assert_eq!(remaining_mask, 0b010);
+
+        let collected_again = collect_actor_trigger_contacts(&world, 1, 10, 3, &mut remaining_mask);
+        assert_eq!(collected_again, 0);
+        assert_eq!(remaining_mask, 0b010);
+    }
+
+    #[test]
+    fn invariant_rejects_unsorted_contacts() {
+        let bounds = Aabb2::new(
+            Vec2::new(StrictF64::new(0.0), StrictF64::new(0.0)),
+            Vec2::new(StrictF64::new(8.0), StrictF64::new(8.0)),
+        );
+        let mut world = PhysicsWorld2d::<2, 2>::new(bounds);
+        world.add_body(sample_body(1, 1.0, 1.0));
+        world.add_body(sample_body(2, 2.0, 2.0));
+        world.contacts.clear();
+        world
+            .contacts
+            .push(Contact2d { a: 2, b: 3 })
+            .expect("contact capacity must allow first manual insert");
+        world
+            .contacts
+            .push(Contact2d { a: 1, b: 2 })
+            .expect("contact capacity must allow second manual insert");
+        assert!(!world.invariant());
     }
 }

@@ -943,7 +943,8 @@ World invariants are exactly:
   \item each body satisfies its body invariant,
   \item body ids are strictly increasing in storage order,
   \item every body AABB lies within bounds,
-  \item every contact satisfies \code{a < b}.
+  \item every contact satisfies \code{a < b},
+  \item contacts are strictly increasing in lexicographic key order \code{(a,b)}.
 \end{enumerate}
 
 Adding a body requires ascending id order and panics otherwise. After adding or moving a body, clamping is exact: if body half-extents are $h_x,h_y$ and bounds are $[m_x,M_x]\times[m_y,M_y]$, then the center is clamped to
@@ -955,7 +956,7 @@ Setting body activity or position has both deferred and eager versions; eager ve
 
 \code{step()} increments the world tick by $1$ and refreshes contacts.
 
-\code{has\_contact(a,b)} normalizes the id pair into sorted order and linearly scans the cached contact list.
+\code{has\_contact(a,b)} normalizes the id pair into sorted order and performs membership query over the sorted cached contact vector by key \code{(a,b)}.
 
 \subsection{Contact refresh algorithm}
 
@@ -964,7 +965,7 @@ Let \code{intersects(left,right)} mean inclusive AABB overlap:
 \ell_{\min x}\le r_{\max x} \land \ell_{\max x}\ge r_{\min x} \land \ell_{\min y}\le r_{\max y} \land \ell_{\max y}\ge r_{\min y}.
 \]
 
-When the number of bodies is at most $12$, contact refresh computes AABBs for active bodies, enumerates every active pair, and appends a contact for each intersecting pair in increasing storage-pair order.
+When the number of bodies is at most $12$, contact refresh computes AABBs for active bodies, enumerates every active pair, appends a contact for each intersecting pair in increasing storage-pair order, then sorts the resulting contact vector by key \code{(a,b)}.
 
 When the number of bodies exceeds $12$, refresh performs sweep-and-prune on $x$ intervals:
 \begin{enumerate}
@@ -979,7 +980,7 @@ When the number of bodies exceeds $12$, refresh performs sweep-and-prune on $x$ 
 
 \code{set\_trigger\_mask\_deferred(world,first\_trigger\_id,trigger\_count,active\_mask)} requires \code{trigger\_count <= 64}. For each index $i$ in $[0,\code{trigger\_count})$ it sets body \code{first\_trigger\_id+i} active iff bit $i$ of \code{active\_mask} is $1$.
 
-\code{collect\_actor\_trigger\_contacts(world,actor\_id,first\_trigger\_id,trigger\_count,remaining\_mask)} also requires \code{trigger\_count <= 64}. For each trigger bit still present in \code{remaining\_mask}, if the world has contact between the actor and that trigger body, the helper clears the bit in \code{remaining\_mask} and increments the collected count. It does \emph{not} mutate body activity or refresh contacts during the scan. Caller-visible trigger activity is updated afterward in one batch. It returns the number of collected triggers as \code{u8}.
+\code{collect\_actor\_trigger\_contacts(world,actor\_id,first\_trigger\_id,trigger\_count,remaining\_mask)} also requires \code{trigger\_count <= 64}. It reads the cached contacts, computes which trigger ids in the contiguous range \code{[first\_trigger\_id, first\_trigger\_id + trigger\_count)} are currently in contact with \code{actor\_id}, intersects that set with the bits still present in \code{remaining\_mask}, clears exactly those intersecting bits in \code{remaining\_mask}, and returns the number of cleared bits as \code{u8}. It does \emph{not} mutate body activity or refresh contacts during the scan. Caller-visible trigger activity is updated afterward in one batch.
 
 \section{Builtin game registry}
 
