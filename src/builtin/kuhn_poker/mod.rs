@@ -202,8 +202,10 @@ impl single_player::SinglePlayerGame for KuhnPoker {
 
     fn init_with_params(&self, seed: Seed, _params: &Self::Params) -> Self::State {
         let mut rng = DeterministicRng::from_seed_and_stream(seed, 0);
-        let mut state = KuhnPokerState::default();
-        state.reward = 0;
+        let mut state = KuhnPokerState {
+            reward: 0,
+            ..Default::default()
+        };
         Self::reset_round(&mut state, &mut rng);
         state
     }

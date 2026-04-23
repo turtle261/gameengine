@@ -49,7 +49,7 @@ impl BiasedCoinFlipConfig {
 }
 
 /// Complete deterministic environment state.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct BiasedCoinFlipState {
     /// Active immutable configuration.
     pub config: BiasedCoinFlipConfig,
@@ -57,16 +57,6 @@ pub struct BiasedCoinFlipState {
     pub coin_face: u8,
     /// Last reward.
     pub reward: Reward,
-}
-
-impl Default for BiasedCoinFlipState {
-    fn default() -> Self {
-        Self {
-            config: BiasedCoinFlipConfig::default(),
-            coin_face: 0,
-            reward: 0,
-        }
-    }
 }
 
 /// Player observation exposing the currently sampled coin face.
