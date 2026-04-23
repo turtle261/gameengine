@@ -59,6 +59,18 @@ const TICTACTOE_CONTROLS: ControlMap = ControlMap {
 const BLACKJACK_CONTROLS: ControlMap = ControlMap {
     prompt: "choose action [hit/stand]",
 };
+const COIN_FLIP_CONTROLS: ControlMap = ControlMap {
+    prompt: "choose action [0/1]",
+};
+const BIASED_RPS_CONTROLS: ControlMap = ControlMap {
+    prompt: "choose action [rock/paper/scissors]",
+};
+const KUHN_POKER_CONTROLS: ControlMap = ControlMap {
+    prompt: "choose action [bet/pass]",
+};
+const EXTENDED_TIGER_CONTROLS: ControlMap = ControlMap {
+    prompt: "choose action [stand/listen/open1/open2]",
+};
 #[cfg(feature = "physics")]
 const PLATFORMER_CONTROLS: ControlMap = ControlMap {
     prompt: "choose action [stay/left/right/jump]",
@@ -68,7 +80,43 @@ const PLATFORMER_CONTROLS: ControlMap = ControlMap {
 pub fn all_games() -> &'static [GameDescriptor] {
     #[cfg(feature = "physics")]
     {
-        static GAMES: [GameDescriptor; 3] = [
+        static GAMES: [GameDescriptor; 7] = [
+            GameDescriptor {
+                name: "coin_flip",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_biased_coinflip,
+                controls: Some(&COIN_FLIP_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
+            GameDescriptor {
+                name: "biased_rock_paper_scissor",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_biased_rps,
+                controls: Some(&BIASED_RPS_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
+            GameDescriptor {
+                name: "kuhn_poker",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_kuhn_poker,
+                controls: Some(&KUHN_POKER_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
+            GameDescriptor {
+                name: "extended_tiger",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_extended_tiger,
+                controls: Some(&EXTENDED_TIGER_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
             GameDescriptor {
                 name: "tictactoe",
                 #[cfg(feature = "cli")]
@@ -102,7 +150,43 @@ pub fn all_games() -> &'static [GameDescriptor] {
 
     #[cfg(not(feature = "physics"))]
     {
-        static GAMES: [GameDescriptor; 2] = [
+        static GAMES: [GameDescriptor; 6] = [
+            GameDescriptor {
+                name: "coin_flip",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_biased_coinflip,
+                controls: Some(&COIN_FLIP_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
+            GameDescriptor {
+                name: "biased_rock_paper_scissor",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_biased_rps,
+                controls: Some(&BIASED_RPS_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
+            GameDescriptor {
+                name: "kuhn_poker",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_kuhn_poker,
+                controls: Some(&KUHN_POKER_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
+            GameDescriptor {
+                name: "extended_tiger",
+                #[cfg(feature = "cli")]
+                runner: crate::cli::run_extended_tiger,
+                controls: Some(&EXTENDED_TIGER_CONTROLS),
+                default_renderer: false,
+                physics_renderer: false,
+                policies: &STANDARD_POLICIES,
+            },
             GameDescriptor {
                 name: "tictactoe",
                 #[cfg(feature = "cli")]

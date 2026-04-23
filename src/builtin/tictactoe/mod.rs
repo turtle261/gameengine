@@ -240,7 +240,7 @@ impl single_player::SinglePlayerGame for TicTacToe {
     type WordBuf = FixedVec<u64, 1>;
 
     fn name(&self) -> &'static str {
-        "tictactoe"
+        "tic_tac_toe"
     }
 
     fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {

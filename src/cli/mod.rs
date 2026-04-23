@@ -6,7 +6,11 @@ use std::io::{self, Write};
 
 use crate::buffer::Buffer;
 #[cfg(feature = "builtin")]
-use crate::builtin::{Blackjack, BlackjackAction, TicTacToe, TicTacToeAction};
+use crate::builtin::{
+    BiasedCoinFlip, BiasedCoinFlipAction, BiasedRockPaperScissor, BiasedRockPaperScissorAction,
+    Blackjack, BlackjackAction, ExtendedTiger, ExtendedTigerAction, KuhnPoker, KuhnPokerAction,
+    TicTacToe, TicTacToeAction,
+};
 #[cfg(feature = "physics")]
 use crate::builtin::{Platformer, PlatformerAction};
 use crate::core::observe::{Observe, Observer};
@@ -385,6 +389,94 @@ pub(crate) fn run_blackjack(config: CliConfig, mode: RunMode) -> Result<(), Stri
     )
 }
 
+pub(crate) fn run_biased_coinflip(config: CliConfig, mode: RunMode) -> Result<(), String> {
+    if config.render_physics {
+        return Err("coin_flip does not support --render-physics".to_string());
+    }
+    #[cfg(feature = "render")]
+    if config.render {
+        return Err("coin_flip does not support --render".to_string());
+    }
+    if config.render {
+        return Err("coin_flip does not support --render".to_string());
+    }
+
+    run_headless_game(
+        BiasedCoinFlip::default(),
+        &config,
+        mode,
+        HumanBiasedCoinFlip,
+        parse_biased_coinflip_script,
+        "coin_flip",
+    )
+}
+
+pub(crate) fn run_biased_rps(config: CliConfig, mode: RunMode) -> Result<(), String> {
+    if config.render_physics {
+        return Err("biased_rock_paper_scissor does not support --render-physics".to_string());
+    }
+    #[cfg(feature = "render")]
+    if config.render {
+        return Err("biased_rock_paper_scissor does not support --render".to_string());
+    }
+    if config.render {
+        return Err("biased_rock_paper_scissor does not support --render".to_string());
+    }
+
+    run_headless_game(
+        BiasedRockPaperScissor,
+        &config,
+        mode,
+        HumanBiasedRockPaperScissor,
+        parse_biased_rps_script,
+        "biased_rock_paper_scissor",
+    )
+}
+
+pub(crate) fn run_kuhn_poker(config: CliConfig, mode: RunMode) -> Result<(), String> {
+    if config.render_physics {
+        return Err("kuhn_poker does not support --render-physics".to_string());
+    }
+    #[cfg(feature = "render")]
+    if config.render {
+        return Err("kuhn_poker does not support --render".to_string());
+    }
+    if config.render {
+        return Err("kuhn_poker does not support --render".to_string());
+    }
+
+    run_headless_game(
+        KuhnPoker,
+        &config,
+        mode,
+        HumanKuhnPoker,
+        parse_kuhn_poker_script,
+        "kuhn_poker",
+    )
+}
+
+pub(crate) fn run_extended_tiger(config: CliConfig, mode: RunMode) -> Result<(), String> {
+    if config.render_physics {
+        return Err("extended_tiger does not support --render-physics".to_string());
+    }
+    #[cfg(feature = "render")]
+    if config.render {
+        return Err("extended_tiger does not support --render".to_string());
+    }
+    if config.render {
+        return Err("extended_tiger does not support --render".to_string());
+    }
+
+    run_headless_game(
+        ExtendedTiger,
+        &config,
+        mode,
+        HumanExtendedTiger,
+        parse_extended_tiger_script,
+        "extended_tiger",
+    )
+}
+
 #[cfg(feature = "physics")]
 pub(crate) fn run_platformer(config: CliConfig, mode: RunMode) -> Result<(), String> {
     #[cfg(feature = "render")]
@@ -435,6 +527,37 @@ where
 }
 
 fn run_validation_smoke() -> Result<(), String> {
+    let coin_flip_hash = {
+        let mut session = Session::new(BiasedCoinFlip::default(), 7);
+        let mut scripted = ScriptedPolicy::new(vec![
+            BiasedCoinFlipAction::GuessHeads,
+            BiasedCoinFlipAction::GuessTails,
+        ]);
+        run_with_policy(&mut session, 8, &mut scripted)
+    };
+    let biased_rps_hash = {
+        let mut session = Session::new(BiasedRockPaperScissor, 7);
+        let mut scripted = ScriptedPolicy::new(vec![
+            BiasedRockPaperScissorAction::Rock,
+            BiasedRockPaperScissorAction::Paper,
+            BiasedRockPaperScissorAction::Scissors,
+        ]);
+        run_with_policy(&mut session, 8, &mut scripted)
+    };
+    let kuhn_poker_hash = {
+        let mut session = Session::new(KuhnPoker, 7);
+        let mut scripted = ScriptedPolicy::new(vec![KuhnPokerAction::Bet, KuhnPokerAction::Pass]);
+        run_with_policy(&mut session, 8, &mut scripted)
+    };
+    let extended_tiger_hash = {
+        let mut session = Session::new(ExtendedTiger, 7);
+        let mut scripted = ScriptedPolicy::new(vec![
+            ExtendedTigerAction::Listen,
+            ExtendedTigerAction::Stand,
+            ExtendedTigerAction::OpenDoorOne,
+        ]);
+        run_with_policy(&mut session, 8, &mut scripted)
+    };
     let ttt_hash = {
         let mut session = Session::new(TicTacToe, 7);
         let mut scripted = ScriptedPolicy::new(vec![
@@ -459,6 +582,10 @@ fn run_validation_smoke() -> Result<(), String> {
         ]);
         run_with_policy(&mut session, 8, &mut scripted)
     };
+    println!("coin_flip legacy regression trace hash: {coin_flip_hash:016x}");
+    println!("biased_rock_paper_scissor legacy regression trace hash: {biased_rps_hash:016x}");
+    println!("kuhn_poker legacy regression trace hash: {kuhn_poker_hash:016x}");
+    println!("extended_tiger legacy regression trace hash: {extended_tiger_hash:016x}");
     println!("tictactoe legacy regression trace hash: {ttt_hash:016x}");
     println!("blackjack legacy regression trace hash: {blackjack_hash:016x}");
     #[cfg(feature = "physics")]
@@ -734,6 +861,41 @@ fn parse_blackjack_script(spec: &str) -> Result<Vec<BlackjackAction>, String> {
     })
 }
 
+fn parse_biased_coinflip_script(spec: &str) -> Result<Vec<BiasedCoinFlipAction>, String> {
+    parse_script(spec, |token| match token.to_ascii_lowercase().as_str() {
+        "0" | "t" | "tail" | "tails" => Some(BiasedCoinFlipAction::GuessTails),
+        "1" | "h" | "head" | "heads" => Some(BiasedCoinFlipAction::GuessHeads),
+        _ => None,
+    })
+}
+
+fn parse_biased_rps_script(spec: &str) -> Result<Vec<BiasedRockPaperScissorAction>, String> {
+    parse_script(spec, |token| match token.to_ascii_lowercase().as_str() {
+        "rock" | "r" | "0" => Some(BiasedRockPaperScissorAction::Rock),
+        "paper" | "p" | "1" => Some(BiasedRockPaperScissorAction::Paper),
+        "scissors" | "s" | "2" => Some(BiasedRockPaperScissorAction::Scissors),
+        _ => None,
+    })
+}
+
+fn parse_kuhn_poker_script(spec: &str) -> Result<Vec<KuhnPokerAction>, String> {
+    parse_script(spec, |token| match token.to_ascii_lowercase().as_str() {
+        "bet" | "b" | "0" => Some(KuhnPokerAction::Bet),
+        "pass" | "p" | "1" => Some(KuhnPokerAction::Pass),
+        _ => None,
+    })
+}
+
+fn parse_extended_tiger_script(spec: &str) -> Result<Vec<ExtendedTigerAction>, String> {
+    parse_script(spec, |token| match token.to_ascii_lowercase().as_str() {
+        "stand" | "s" | "0" => Some(ExtendedTigerAction::Stand),
+        "listen" | "l" | "1" => Some(ExtendedTigerAction::Listen),
+        "open1" | "open_1" | "o1" | "2" => Some(ExtendedTigerAction::OpenDoorOne),
+        "open2" | "open_2" | "o2" | "3" => Some(ExtendedTigerAction::OpenDoorTwo),
+        _ => None,
+    })
+}
+
 #[cfg(feature = "physics")]
 fn parse_platformer_script(spec: &str) -> Result<Vec<PlatformerAction>, String> {
     parse_script(spec, |token| match token.to_ascii_lowercase().as_str() {
@@ -808,6 +970,131 @@ impl Policy<Blackjack> for HumanBlackjack {
             let candidate = match input.trim().to_ascii_lowercase().as_str() {
                 "hit" | "h" => BlackjackAction::Hit,
                 "stand" | "s" => BlackjackAction::Stand,
+                _ => {
+                    println!("legal actions: {:?}", legal_actions);
+                    continue;
+                }
+            };
+            if legal_actions.contains(&candidate) {
+                return candidate;
+            }
+            println!("legal actions: {:?}", legal_actions);
+        }
+    }
+}
+
+struct HumanBiasedCoinFlip;
+
+impl Policy<BiasedCoinFlip> for HumanBiasedCoinFlip {
+    fn choose_action(
+        &mut self,
+        _game: &BiasedCoinFlip,
+        _state: &<BiasedCoinFlip as crate::game::GameKernel>::State,
+        _player: usize,
+        _observation: &<BiasedCoinFlip as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<BiasedCoinFlip as crate::game::GameKernel>::Action],
+        _rng: &mut crate::DeterministicRng,
+    ) -> <BiasedCoinFlip as crate::game::GameKernel>::Action {
+        loop {
+            let input = prompt("choose action [0/1]: ").expect("stdin prompt failed");
+            let candidate = match input.trim().to_ascii_lowercase().as_str() {
+                "0" | "t" | "tail" | "tails" => BiasedCoinFlipAction::GuessTails,
+                "1" | "h" | "head" | "heads" => BiasedCoinFlipAction::GuessHeads,
+                _ => {
+                    println!("legal actions: {:?}", legal_actions);
+                    continue;
+                }
+            };
+            if legal_actions.contains(&candidate) {
+                return candidate;
+            }
+            println!("legal actions: {:?}", legal_actions);
+        }
+    }
+}
+
+struct HumanBiasedRockPaperScissor;
+
+impl Policy<BiasedRockPaperScissor> for HumanBiasedRockPaperScissor {
+    fn choose_action(
+        &mut self,
+        _game: &BiasedRockPaperScissor,
+        _state: &<BiasedRockPaperScissor as crate::game::GameKernel>::State,
+        _player: usize,
+        _observation: &<BiasedRockPaperScissor as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<BiasedRockPaperScissor as crate::game::GameKernel>::Action],
+        _rng: &mut crate::DeterministicRng,
+    ) -> <BiasedRockPaperScissor as crate::game::GameKernel>::Action {
+        loop {
+            let input =
+                prompt("choose action [rock/paper/scissors]: ").expect("stdin prompt failed");
+            let candidate = match input.trim().to_ascii_lowercase().as_str() {
+                "rock" | "r" | "0" => BiasedRockPaperScissorAction::Rock,
+                "paper" | "p" | "1" => BiasedRockPaperScissorAction::Paper,
+                "scissors" | "s" | "2" => BiasedRockPaperScissorAction::Scissors,
+                _ => {
+                    println!("legal actions: {:?}", legal_actions);
+                    continue;
+                }
+            };
+            if legal_actions.contains(&candidate) {
+                return candidate;
+            }
+            println!("legal actions: {:?}", legal_actions);
+        }
+    }
+}
+
+struct HumanKuhnPoker;
+
+impl Policy<KuhnPoker> for HumanKuhnPoker {
+    fn choose_action(
+        &mut self,
+        _game: &KuhnPoker,
+        _state: &<KuhnPoker as crate::game::GameKernel>::State,
+        _player: usize,
+        _observation: &<KuhnPoker as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<KuhnPoker as crate::game::GameKernel>::Action],
+        _rng: &mut crate::DeterministicRng,
+    ) -> <KuhnPoker as crate::game::GameKernel>::Action {
+        loop {
+            let input = prompt("choose action [bet/pass]: ").expect("stdin prompt failed");
+            let candidate = match input.trim().to_ascii_lowercase().as_str() {
+                "bet" | "b" | "0" => KuhnPokerAction::Bet,
+                "pass" | "p" | "1" => KuhnPokerAction::Pass,
+                _ => {
+                    println!("legal actions: {:?}", legal_actions);
+                    continue;
+                }
+            };
+            if legal_actions.contains(&candidate) {
+                return candidate;
+            }
+            println!("legal actions: {:?}", legal_actions);
+        }
+    }
+}
+
+struct HumanExtendedTiger;
+
+impl Policy<ExtendedTiger> for HumanExtendedTiger {
+    fn choose_action(
+        &mut self,
+        _game: &ExtendedTiger,
+        _state: &<ExtendedTiger as crate::game::GameKernel>::State,
+        _player: usize,
+        _observation: &<ExtendedTiger as crate::game::ObservationModel>::Obs,
+        legal_actions: &[<ExtendedTiger as crate::game::GameKernel>::Action],
+        _rng: &mut crate::DeterministicRng,
+    ) -> <ExtendedTiger as crate::game::GameKernel>::Action {
+        loop {
+            let input =
+                prompt("choose action [stand/listen/open1/open2]: ").expect("stdin prompt failed");
+            let candidate = match input.trim().to_ascii_lowercase().as_str() {
+                "stand" | "s" | "0" => ExtendedTigerAction::Stand,
+                "listen" | "l" | "1" => ExtendedTigerAction::Listen,
+                "open1" | "open_1" | "o1" | "2" => ExtendedTigerAction::OpenDoorOne,
+                "open2" | "open_2" | "o2" | "3" => ExtendedTigerAction::OpenDoorTwo,
                 _ => {
                     println!("legal actions: {:?}", legal_actions);
                     continue;
