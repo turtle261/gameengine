@@ -12,7 +12,7 @@ agent-facing front door is one action channel and one percept channel.
 
 Everything else is layered on top:
 
-- rendering is a derived view,
+- rendering is a derived view of the percept,
 - human pacing is a presentation concern,
 - networking is a transport concern,
 - machine control is just another action source,
