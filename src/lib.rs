@@ -28,8 +28,8 @@ pub mod verification;
 pub use buffer::{BitWords, Buffer, CapacityError, FixedVec};
 pub use compact::CompactSpec;
 pub use core::env::{
-    ActionToken, ActionTokenError, AixiEnvironment, DefaultEnvironment, EnvError, Environment,
-    Percept,
+    ActionToken, ActionTokenError, AixiEnvironment, AixiFrontDoorError, DefaultEnvironment,
+    EnvError, Environment, Percept,
 };
 pub use core::serialization::{
     BitStream, BitStreamBits, serialize_action, serialize_history, serialize_percept,

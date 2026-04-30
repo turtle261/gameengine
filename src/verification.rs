@@ -71,9 +71,30 @@ pub fn assert_compact_roundtrip<G: Game>(game: &G, params: &G::Params, action: &
     assert_eq!(game.decode_action(encoded), Some(*action));
 }
 
+/// Asserts that every declared compact action symbol is semantically decodable.
+pub fn assert_compact_action_contracts<G: Game>(game: &G, params: &G::Params) {
+    let action_count = game.compact_spec_for(params).action_count;
+    if action_count == 0 {
+        return;
+    }
+
+    let mut encoded = 0u64;
+    while encoded < action_count {
+        let action = game
+            .decode_action(encoded)
+            .unwrap_or_else(|| panic!("declared action {encoded} failed to decode"));
+        assert_eq!(
+            game.encode_action(&action),
+            encoded,
+            "decoded action {encoded} must round-trip through the compact codec"
+        );
+        encoded += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::assert_compact_roundtrip;
+    use super::{assert_compact_action_contracts, assert_compact_roundtrip};
     use crate::buffer::FixedVec;
     use crate::compact::CompactSpec;
     use crate::game::GameAuthoring;
@@ -177,5 +198,12 @@ mod tests {
     fn compact_roundtrip_still_checks_declared_codec_surface() {
         let game = MinimalGame { compact_actions: 1 };
         assert_compact_roundtrip(&game, &(), &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "declared action 0 failed to decode")]
+    fn compact_action_contracts_reject_non_total_declared_alphabet() {
+        let game = MinimalGame { compact_actions: 2 };
+        assert_compact_action_contracts(&game, &());
     }
 }

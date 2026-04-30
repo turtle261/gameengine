@@ -836,9 +836,16 @@ where \code{reward} is a \code{CompactReward}. Mathematically this record is one
   \item \code{InvalidRewardEncoding\{reason\}}
   \item \code{InvalidActionToken\{reason\}}
   \item \code{InvalidParameters\{game\}}
+  \item \code{InvalidAixiFrontDoor\{game,reason\}}
 \end{itemize}
 
-An \code{Environment<G,H,MAX\_WORDS>} stores a session and an immutable \code{agent\_player}. This surface is the reference single-agent adapter built from game/session components for one designated player. The stored session is encapsulated host-side realization state, not part of the adapter's public observation surface. The adapter is well defined only when the current realization satisfies the AIXI front-door validity conditions above. Its percept channel is always that designated player's canonical player observation together with that same player's scalar reward and terminal flag. Spectator views and oracle world views remain outside this surface. Construction with explicit params first validates \code{params\_invariant} and validates the chosen \code{agent\_player} lies in $[0,\code{player\_count()})$.
+\code{AixiFrontDoorError} is exactly:
+\begin{itemize}
+  \item \code{EmptyActionAlphabet}
+  \item \code{NonTotalActionDecode\{encoded,action\_count\}}
+\end{itemize}
+
+An \code{Environment<G,H,MAX\_WORDS>} stores a session and an immutable \code{agent\_player}. This surface is the reference single-agent adapter built from game/session components for one designated player. The stored session is encapsulated host-side realization state, not part of the adapter's public observation surface. The adapter is well defined only when the current realization satisfies the AIXI front-door validity conditions above. Its percept channel is always that designated player's canonical player observation together with that same player's scalar reward and terminal flag. Spectator views and oracle world views remain outside this surface. Construction with explicit params first validates \code{params\_invariant}, validates the chosen \code{agent\_player} lies in $[0,\code{player\_count()})$, and validates the AIXI action contract for the target compact descriptor: \code{action\_count \ge 1} and every encoded action in $[0,\code{action\_count})$ decodes successfully. Violations return \code{InvalidAixiFrontDoor\{game,reason\}}.
 
 The trait \code{AixiEnvironment<MAX\_WORDS>} exposes the exact methods \code{reset\_seed(seed)}, \code{reset\_seed\_with\_params(seed,params)}, and \code{step(action)} where \code{action} is an \code{ActionToken}. This is the canonical single-agent adapter contract, not the architecturally primary game/session contract. It is intentionally minimal: the adapter may reveal only what follows from explicit caller-supplied setup inputs together with the returned percept history. The historical name \code{InfotheoryEnvironment<MAX\_WORDS>} is a compatibility alias of this same contract. The alias \code{DefaultEnvironment<G,MAX\_WORDS>} is exactly \code{Environment<G, DynamicHistory<G,512,8>, MAX\_WORDS>}.
 
@@ -846,12 +853,13 @@ For \code{BitPacket}, the method \code{words()} returns the currently populated 
 
 The concrete \code{Environment} exposes no \code{session()}, \code{session\_mut()}, state, RNG, trace, history, or oracle-view accessors. Its only additional public accessor is \code{agent\_player()}, which returns the designated acting player. A conforming implementation shall not expose through \code{AixiEnvironment} or \code{Environment} any direct or indirect handle by which the caller can inspect, clone, fork, or mutate the underlying session, hidden state, RNG internals, replay buffers, or debug/oracle projections. If a host intentionally wants such an oracle/debug surface, it must be a separate explicit API outside \code{AixiEnvironment}; it is opt-in host tooling, not part of the black-box agent contract.
 
-The reset operations \code{reset(seed)} and \code{reset\_with\_params(seed,params)} first reset the underlying session, then return the current designated-player percept as the initial percept $x_0$, with reward exactly $0$, corresponding compact encoding, and terminality equal to the reset state. This zero-reward initial-percept law is part of AIXI front-door validity rather than an incidental convention. The explicit-params form first validates \code{params\_invariant} and otherwise returns \code{InvalidParameters}.
+The reset operations \code{reset(seed)} and \code{reset\_with\_params(seed,params)} first reset the underlying session, then return the current designated-player percept as the initial percept $x_0$, with reward exactly $0$, corresponding compact encoding, and terminality equal to the reset state. This zero-reward initial-percept law is part of AIXI front-door validity rather than an incidental convention. The explicit-params form first validates \code{params\_invariant}, re-validates the AIXI action contract for the target compact descriptor, and otherwise returns \code{InvalidParameters} or \code{InvalidAixiFrontDoor}.
 
 The exact environment step law on checked action token $a$ is:
 \begin{enumerate}
   \item if the session is terminal, return \code{SessionTerminated};
-  \item decode $a$ via the game compact decoder; by the AIXI front-door validity law this succeeds with the uniquely corresponding underlying action, so failure here is a violated compact-spec contract rather than a recoverable agent input error;
+  \item revalidate that $a$ lies in the current compact action alphabet; if not, return \code{InvalidActionToken\{reason\}};
+  \item decode $a$ via the game compact decoder; by the AIXI front-door validity law this succeeds with the uniquely corresponding underlying action, so failure here returns \code{InvalidAixiFrontDoor\{game,NonTotalActionDecode\{encoded,action\_count\}\}} rather than panicking;
   \item build a one-element joint action buffer containing exactly the designated agent player's action;
   \item if the underlying game distinguishes legal and illegal moves, apply its declared total in-alphabet action semantics; rejecting an in-alphabet action at the AIXI adapter boundary is forbidden;
   \item step the underlying session with those joint actions;

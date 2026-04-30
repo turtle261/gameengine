@@ -18,7 +18,8 @@ pub const PROOF_CLAIM: &str = include_str!("../../proofs/claim.md");
 pub const PROOF_MANIFEST_RAW: &str = include_str!("../../proofs/manifest.txt");
 
 pub use crate::verification::{
-    assert_compact_roundtrip, assert_observation_contracts, assert_transition_contracts,
+    assert_compact_action_contracts, assert_compact_roundtrip, assert_observation_contracts,
+    assert_transition_contracts,
 };
 pub use liveness::{
     FairnessWitness, FiniteSupportOutcome, ProbabilisticWitness, TerminationWitness,
@@ -51,10 +52,11 @@ pub fn assert_generated_game_surface<G: Game>(
 ) {
     assert_transition_contracts(game, state, actions, seed);
     assert_observation_contracts(game, state);
-    if game.compact_spec_for(params).action_count > 0
-        && let Some(first) = actions.as_slice().first()
-    {
-        assert_compact_roundtrip(game, params, &first.action);
+    if game.compact_spec_for(params).action_count > 0 {
+        assert_compact_action_contracts(game, params);
+        if let Some(first) = actions.as_slice().first() {
+            assert_compact_roundtrip(game, params, &first.action);
+        }
     }
 }
 

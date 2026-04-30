@@ -152,6 +152,42 @@ pub enum EnvError {
         /// Stable machine-readable game name.
         game: &'static str,
     },
+    /// Game compact surface violates the AIXI front-door action contract.
+    InvalidAixiFrontDoor {
+        /// Stable machine-readable game name.
+        game: &'static str,
+        /// Specific violated AIXI front-door obligation.
+        reason: AixiFrontDoorError,
+    },
+}
+
+/// Structured reasons why a game cannot soundly expose the AIXI front door.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AixiFrontDoorError {
+    /// The compact action alphabet is empty.
+    EmptyActionAlphabet,
+    /// A declared in-alphabet action fails to decode to a semantic action.
+    NonTotalActionDecode {
+        /// Declared in-alphabet compact action symbol.
+        encoded: u64,
+        /// Declared compact action alphabet size.
+        action_count: u64,
+    },
+}
+
+impl fmt::Display for AixiFrontDoorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyActionAlphabet => f.write_str("compact action alphabet must be non-empty"),
+            Self::NonTotalActionDecode {
+                encoded,
+                action_count,
+            } => write!(
+                f,
+                "declared in-alphabet action {encoded} failed to decode under action_count={action_count}"
+            ),
+        }
+    }
 }
 
 impl fmt::Display for EnvError {
@@ -184,6 +220,12 @@ impl fmt::Display for EnvError {
             }
             Self::InvalidParameters { game } => {
                 write!(f, "invalid parameter bundle for game `{game}`")
+            }
+            Self::InvalidAixiFrontDoor { game, reason } => {
+                write!(
+                    f,
+                    "game `{game}` violates AIXI front-door contract: {reason}"
+                )
             }
         }
     }
@@ -254,6 +296,32 @@ where
         Ok(())
     }
 
+    fn validate_aixi_front_door_for(game: &G, params: &G::Params) -> Result<(), EnvError> {
+        let spec = game.compact_spec_for(params);
+        if spec.action_count == 0 {
+            return Err(EnvError::InvalidAixiFrontDoor {
+                game: game.name(),
+                reason: AixiFrontDoorError::EmptyActionAlphabet,
+            });
+        }
+
+        let mut encoded = 0u64;
+        while encoded < spec.action_count {
+            if game.decode_action(encoded).is_none() {
+                return Err(EnvError::InvalidAixiFrontDoor {
+                    game: game.name(),
+                    reason: AixiFrontDoorError::NonTotalActionDecode {
+                        encoded,
+                        action_count: spec.action_count,
+                    },
+                });
+            }
+            encoded += 1;
+        }
+
+        Ok(())
+    }
+
     /// Creates a new compact environment initialized with explicit params and agent id.
     pub fn try_new_with_agent_params(
         game: G,
@@ -263,6 +331,7 @@ where
     ) -> Result<Self, EnvError> {
         Self::validate_params(&game, &params)?;
         Self::validate_player(&game, agent_player)?;
+        Self::validate_aixi_front_door_for(&game, &params)?;
         Ok(Self {
             session: SessionKernel::new_with_params(game, seed, params),
             agent_player,
@@ -378,6 +447,7 @@ where
         params: G::Params,
     ) -> Result<Percept<MAX_WORDS>, EnvError> {
         Self::validate_params(self.session.game(), &params)?;
+        Self::validate_aixi_front_door_for(self.session.game(), &params)?;
         self.session.reset_with_params(seed, params);
         Ok(Percept {
             observation_bits: self.encode_current_observation()?,
@@ -392,12 +462,21 @@ where
             return Err(EnvError::SessionTerminated);
         }
 
-        let encoded = action.encoded();
-        let action = self.session.game().decode_action(encoded).unwrap_or_else(|| {
-            panic!(
-                "AIXI front-door validity violated: in-alphabet token `{encoded}` failed to decode"
-            )
-        });
+        let spec = self.session.compact_spec();
+        let encoded = ActionToken::from_spec(&spec, action.encoded())
+            .map_err(|reason| EnvError::InvalidActionToken { reason })?
+            .encoded();
+        let action =
+            self.session
+                .game()
+                .decode_action(encoded)
+                .ok_or(EnvError::InvalidAixiFrontDoor {
+                    game: self.session.game().name(),
+                    reason: AixiFrontDoorError::NonTotalActionDecode {
+                        encoded,
+                        action_count: spec.action_count,
+                    },
+                })?;
 
         let mut actions = G::JointActionBuf::default();
         actions
@@ -502,7 +581,9 @@ where
 
 #[cfg(test)]
 mod regression_tests {
-    use super::{ActionToken, ActionTokenError, DefaultEnvironment, EnvError, Observer};
+    use super::{
+        ActionToken, ActionTokenError, AixiFrontDoorError, DefaultEnvironment, EnvError, Observer,
+    };
     use crate::buffer::FixedVec;
     use crate::compact::CompactSpec;
     use crate::game::GameAuthoring;
@@ -535,6 +616,12 @@ mod regression_tests {
 
     #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
     struct RejectingParamsGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct ZeroActionGame;
+
+    #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+    struct NonTotalDecodeGame;
 
     impl GameAuthoring for DemoGame {
         type Params = u8;
@@ -1047,6 +1134,181 @@ mod regression_tests {
         }
     }
 
+    impl GameAuthoring for ZeroActionGame {
+        type Params = ();
+        type State = ();
+        type Action = u8;
+        type Obs = u8;
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 1>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn name(&self) -> &'static str {
+            "zero-action"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init_with_params(&self, _seed: Seed, _params: &Self::Params) -> Self::State {}
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+        }
+
+        fn observe_player(&self, _state: &Self::State, _player: PlayerId) -> Self::Obs {
+            0
+        }
+
+        fn observe_spectator(&self, _state: &Self::State) -> Self::Obs {
+            0
+        }
+
+        fn step_in_place(
+            &self,
+            _state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut KernelOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 0,
+                })
+                .unwrap();
+        }
+
+        fn compact_spec_for(&self, _params: &Self::Params) -> CompactSpec {
+            CompactSpec {
+                action_count: 0,
+                observation_bits: 1,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 0,
+                reward_offset: 0,
+            }
+        }
+    }
+
+    impl GameAuthoring for NonTotalDecodeGame {
+        type Params = u8;
+        type State = u8;
+        type Action = u8;
+        type Obs = u8;
+        type PlayerBuf = FixedVec<PlayerId, 1>;
+        type ActionBuf = FixedVec<u8, 2>;
+        type JointActionBuf = FixedVec<PlayerAction<u8>, 1>;
+        type RewardBuf = FixedVec<PlayerReward, 1>;
+        type WordBuf = FixedVec<u64, 1>;
+
+        fn default_params(&self) -> Self::Params {
+            1
+        }
+
+        fn name(&self) -> &'static str {
+            "non-total-decode"
+        }
+
+        fn player_count(&self) -> usize {
+            1
+        }
+
+        fn init_with_params(&self, _seed: Seed, params: &Self::Params) -> Self::State {
+            *params
+        }
+
+        fn is_terminal(&self, _state: &Self::State) -> bool {
+            false
+        }
+
+        fn players_to_act(&self, _state: &Self::State, out: &mut Self::PlayerBuf) {
+            out.clear();
+            out.push(0).unwrap();
+        }
+
+        fn legal_actions(
+            &self,
+            _state: &Self::State,
+            _player: PlayerId,
+            out: &mut Self::ActionBuf,
+        ) {
+            out.clear();
+            out.push(0).unwrap();
+            out.push(1).unwrap();
+        }
+
+        fn observe_player(&self, state: &Self::State, _player: PlayerId) -> Self::Obs {
+            *state
+        }
+
+        fn observe_spectator(&self, state: &Self::State) -> Self::Obs {
+            *state
+        }
+
+        fn step_in_place(
+            &self,
+            _state: &mut Self::State,
+            _joint_actions: &Self::JointActionBuf,
+            _rng: &mut DeterministicRng,
+            out: &mut KernelOutcome<Self::RewardBuf>,
+        ) {
+            out.rewards
+                .push(PlayerReward {
+                    player: 0,
+                    reward: 0,
+                })
+                .unwrap();
+        }
+
+        fn compact_spec_for(&self, params: &Self::Params) -> CompactSpec {
+            CompactSpec {
+                action_count: u64::from(*params),
+                observation_bits: 1,
+                observation_stream_len: 1,
+                reward_bits: 1,
+                min_reward: 0,
+                max_reward: 0,
+                reward_offset: 0,
+            }
+        }
+
+        fn encode_action(&self, action: &Self::Action) -> u64 {
+            u64::from(*action)
+        }
+
+        fn decode_action(&self, encoded: u64) -> Option<Self::Action> {
+            (encoded == 0).then_some(0)
+        }
+
+        fn encode_player_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            out.clear();
+            out.push(u64::from(*observation)).unwrap();
+        }
+
+        fn encode_spectator_observation(&self, observation: &Self::Obs, out: &mut Self::WordBuf) {
+            self.encode_player_observation(observation, out);
+        }
+    }
+
     #[test]
     fn step_uses_agent_player_reward() {
         let mut env = DefaultEnvironment::<DemoGame, 2>::new_for_agent(DemoGame, 3, 1);
@@ -1081,6 +1343,80 @@ mod regression_tests {
                 }
             })
         ));
+    }
+
+    #[test]
+    fn constructors_reject_empty_action_alphabet() {
+        assert!(matches!(
+            DefaultEnvironment::<ZeroActionGame, 1>::try_new_with_agent_params(
+                ZeroActionGame,
+                1,
+                0,
+                (),
+            ),
+            Err(EnvError::InvalidAixiFrontDoor {
+                game: "zero-action",
+                reason: AixiFrontDoorError::EmptyActionAlphabet,
+            })
+        ));
+    }
+
+    #[test]
+    fn constructors_reject_non_total_decoding_surface() {
+        assert!(matches!(
+            DefaultEnvironment::<NonTotalDecodeGame, 1>::try_new_with_agent_params(
+                NonTotalDecodeGame,
+                1,
+                0,
+                2,
+            ),
+            Err(EnvError::InvalidAixiFrontDoor {
+                game: "non-total-decode",
+                reason: AixiFrontDoorError::NonTotalActionDecode {
+                    encoded: 1,
+                    action_count: 2,
+                },
+            })
+        ));
+    }
+
+    #[test]
+    fn reset_with_params_rejects_invalid_aixi_surface() {
+        let mut env = DefaultEnvironment::<NonTotalDecodeGame, 1>::new(
+            NonTotalDecodeGame,
+            1,
+            Observer::Player(0),
+        );
+        assert_eq!(
+            env.reset_with_params(7, 2),
+            Err(EnvError::InvalidAixiFrontDoor {
+                game: "non-total-decode",
+                reason: AixiFrontDoorError::NonTotalActionDecode {
+                    encoded: 1,
+                    action_count: 2,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn step_rechecks_token_against_current_compact_spec() {
+        let mut env = DefaultEnvironment::<NonTotalDecodeGame, 1>::new(
+            NonTotalDecodeGame,
+            1,
+            Observer::Player(0),
+        );
+        env.reset_with_params(5, 1).unwrap();
+        let foreign_token = ActionToken::try_new(1, 2).expect("foreign token");
+        assert_eq!(
+            env.step(foreign_token),
+            Err(EnvError::InvalidActionToken {
+                reason: ActionTokenError::OutOfAlphabet {
+                    encoded: 1,
+                    action_count: 1,
+                },
+            })
+        );
     }
 
     #[test]
