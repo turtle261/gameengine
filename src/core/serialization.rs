@@ -98,7 +98,7 @@ impl BitStream {
     /// `value` is only inspected within its low `width` bits; bits at positions
     /// `>= width` must be zero when `width < 64`.
     pub fn push_bits(&mut self, value: u64, width: u8) {
-        debug_assert!(
+        assert!(
             width >= 64 || value >> width == 0,
             "value {value} does not fit within {width} bits",
         );
